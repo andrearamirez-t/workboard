@@ -24,10 +24,7 @@ export default function Bitacora() {
   const [editingText, setEditingText] = useState("")
 
   const load = async () => {
-    const [allLogs, colleagues] = await Promise.all([
-      getAllLogs(user.uid),
-      getColleagues(user),
-    ])
+    const [allLogs, colleagues] = await Promise.all([getAllLogs(user.uid), getColleagues(user)])
     const map = {}
     colleagues.forEach(c => { map[c.id] = c })
     setColleagueMap(map)
@@ -71,113 +68,117 @@ export default function Bitacora() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      <header className="bg-card border-b border-border px-8 py-4 flex justify-between items-center sticky top-0 z-10">
-        <button onClick={() => navigate("/dashboard")} className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Volver</button>
+
+      {/* ── Header ── */}
+      <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
+        style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
+        <button onClick={() => navigate("/dashboard")}
+          className="text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors">
+          ← Volver
+        </button>
         <ThemeToggle />
       </header>
 
-      {/* Hero de la página */}
-      <div className="relative overflow-hidden px-8 py-10"
-        style={{ background: "linear-gradient(135deg, oklch(0.24 0.045 290), oklch(0.22 0.04 320))" }}>
-        <div className="absolute inset-0 opacity-20"
-          style={{ background: "radial-gradient(ellipse at top right, oklch(0.72 0.13 290), transparent 60%)" }} />
+      {/* ── Hero ── */}
+      <div className="relative overflow-hidden px-6 py-12"
+        style={{ background: "linear-gradient(145deg, oklch(0.20 0.050 295), oklch(0.14 0.030 318))" }}>
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 right-0 w-80 h-80 opacity-25"
+            style={{ background: "radial-gradient(circle at top right, oklch(0.72 0.18 295), transparent 65%)", filter: "blur(50px)" }} />
+        </div>
         <div className="max-w-4xl mx-auto w-full relative">
-          <h1 className="text-3xl font-bold text-white mb-1">Bitácora semanal</h1>
-          <p className="text-sm mb-4" style={{ color: "oklch(0.80 0.06 290)" }}>
+          <h1 className="text-[30px] font-bold text-white tracking-tight leading-none">Bitácora semanal</h1>
+          <p className="text-[13px] mt-2 mb-5" style={{ color: "oklch(0.78 0.08 295)" }}>
             {format(weekStart, "d 'de' MMMM", { locale: es })} — {format(weekEnd, "d 'de' MMMM, yyyy", { locale: es })}
           </p>
-          <div className="flex gap-4">
-            <div className="rounded-xl px-4 py-2 text-sm font-medium"
-              style={{ backgroundColor: "oklch(0.30 0.05 290)", color: "oklch(0.85 0.08 290)" }}>
+          <div className="flex gap-3">
+            <div className="rounded-xl px-4 py-2 text-[13px] font-semibold"
+              style={{ backgroundColor: "oklch(0.28 0.05 295)", color: "oklch(0.85 0.10 295)" }}>
               {totalNotas} nota{totalNotas !== 1 ? "s" : ""} esta semana
             </div>
-            <div className="rounded-xl px-4 py-2 text-sm font-medium"
-              style={{ backgroundColor: "oklch(0.30 0.05 290)", color: "oklch(0.85 0.08 290)" }}>
+            <div className="rounded-xl px-4 py-2 text-[13px] font-semibold"
+              style={{ backgroundColor: "oklch(0.28 0.05 295)", color: "oklch(0.85 0.10 295)" }}>
               {totalPersonas} compañero{totalPersonas !== 1 ? "s" : ""}
             </div>
           </div>
         </div>
       </div>
 
-      <main className="px-8 py-8 max-w-4xl mx-auto w-full flex-1">
+      <main className="px-6 py-8 max-w-4xl mx-auto w-full flex-1">
         {loading ? (
-          <p className="text-muted-foreground">Cargando...</p>
+          <p className="text-muted-foreground text-[13px]">Cargando…</p>
         ) : Object.keys(grouped).length === 0 ? (
-          <div className="text-center py-20 text-muted-foreground">
-            <p className="text-lg font-medium mb-1">Sin notas esta semana</p>
-            <p className="text-sm">Ve al perfil de un compañero y agrega una nota.</p>
+          <div className="text-center py-24 text-muted-foreground animate-fade-up">
+            <p className="text-[15px] font-semibold text-foreground mb-1">Sin notas esta semana</p>
+            <p className="text-[13px]">Ve al perfil de un compañero y agrega una nota.</p>
           </div>
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-4">
             {Object.entries(grouped).map(([colleagueId, data]) => {
               const h = hashHue(colleagueId)
-              const initials = data.name.charAt(0).toUpperCase()
               return (
-                <div key={colleagueId} className="bg-card rounded-2xl border border-border overflow-hidden"
-                  style={{ borderLeftColor: `oklch(0.60 0.18 ${h})`, borderLeftWidth: "4px" }}>
+                <div key={colleagueId} className="bg-card border border-border rounded-2xl overflow-hidden"
+                  style={{ borderLeftColor: `oklch(0.60 0.18 ${h})`, borderLeftWidth: "3px" }}>
 
-                  {/* Cabecera del compañero */}
-                  <div className="flex items-center gap-3 px-5 py-4 border-b border-border cursor-pointer hover:bg-muted/30 transition-colors"
+                  {/* Colleague header */}
+                  <div className="flex items-center gap-3 px-5 py-3.5 border-b border-border cursor-pointer hover:bg-muted/40 transition-colors"
                     onClick={() => navigate(`/colleague/${colleagueId}`)}>
-                    <div className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-white font-bold text-sm"
-                      style={{ background: `linear-gradient(135deg, oklch(0.65 0.16 ${h}), oklch(0.55 0.18 ${(h + 30) % 360}))` }}>
-                      {initials}
+                    <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-white font-bold text-[13px]"
+                      style={{ background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))` }}>
+                      {data.name.charAt(0).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-foreground">{data.name}</p>
+                      <p className="font-semibold text-[14px] text-foreground">{data.name}</p>
                       {colleagueMap[colleagueId]?.area && (
-                        <p className="text-xs text-muted-foreground">{colleagueMap[colleagueId].area}</p>
+                        <p className="text-[11px] text-muted-foreground">{colleagueMap[colleagueId].area}</p>
                       )}
                     </div>
-                    <span className="text-xs text-muted-foreground"
-                      style={{ color: `oklch(0.60 0.12 ${h})` }}>
+                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ backgroundColor: `oklch(0.60 0.18 ${h} / 0.12)`, color: `oklch(0.48 0.18 ${h})` }}>
                       {data.logs.length} nota{data.logs.length !== 1 ? "s" : ""}
                     </span>
                   </div>
 
-                  {/* Notas */}
+                  {/* Notes */}
                   <div className="divide-y divide-border">
-                    {data.logs.map((log) => (
-                      <div key={log.id} className="px-5 py-3 group">
+                    {data.logs.map(log => (
+                      <div key={log.id} className="px-5 py-3.5 group">
                         <div className="flex gap-3 items-start">
-                          <div className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0"
+                          <div className="w-1.5 h-1.5 rounded-full mt-[7px] flex-shrink-0"
                             style={{ backgroundColor: `oklch(0.60 0.16 ${h})` }} />
                           <div className="flex-1 min-w-0">
                             {editingId === log.id ? (
                               <div className="space-y-2">
-                                <textarea
-                                  value={editingText}
-                                  onChange={e => setEditingText(e.target.value)}
+                                <textarea value={editingText} onChange={e => setEditingText(e.target.value)}
                                   rows={3}
-                                  className="w-full bg-background border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                                />
+                                  className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
                                 <div className="flex gap-2">
                                   <button onClick={() => handleSaveEdit(log.id)}
-                                    className="text-xs font-medium px-3 py-1 rounded-md text-white"
+                                    className="text-[12px] font-semibold px-3.5 py-1.5 rounded-lg text-white"
                                     style={{ backgroundColor: `oklch(0.55 0.16 ${h})` }}>
                                     Guardar
                                   </button>
                                   <button onClick={() => setEditingId(null)}
-                                    className="text-xs font-medium px-3 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground">
+                                    className="text-[12px] font-medium px-3.5 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors">
                                     Cancelar
                                   </button>
                                 </div>
                               </div>
                             ) : (
                               <>
-                                <p className="text-sm text-foreground leading-relaxed">{log.nota}</p>
-                                <div className="flex justify-between items-center mt-1">
-                                  <p className="text-xs text-muted-foreground capitalize">
+                                <p className="text-[14px] text-foreground leading-relaxed">{log.nota}</p>
+                                <div className="flex justify-between items-center mt-1.5">
+                                  <p className="text-[11px] text-muted-foreground capitalize">
                                     {log.createdAt?.toDate ? format(log.createdAt.toDate(), "EEEE d 'de' MMMM", { locale: es }) : ""}
                                   </p>
                                   <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                                     <button onClick={() => { setEditingId(log.id); setEditingText(log.nota) }}
-                                      className="text-xs font-medium hover:opacity-70"
+                                      className="text-[12px] font-medium hover:opacity-70 transition-opacity"
                                       style={{ color: `oklch(0.60 0.14 ${h})` }}>
                                       Editar
                                     </button>
                                     <button onClick={() => handleDeleteLog(log.id)}
-                                      className="text-xs text-destructive hover:opacity-70">
+                                      className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
                                       Eliminar
                                     </button>
                                   </div>
@@ -189,6 +190,7 @@ export default function Bitacora() {
                       </div>
                     ))}
                   </div>
+
                 </div>
               )
             })}

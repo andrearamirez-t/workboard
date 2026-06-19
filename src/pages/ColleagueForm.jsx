@@ -8,6 +8,11 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import EmojiPicker from "emoji-picker-react"
 import { Footer } from "@/components/ui/Footer"
 
+const AREAS = [
+  "Desarrollo de Software", "Robótica", "Inteligencia Artificial",
+  "Infraestructura / DevOps", "Diseño UX/UI", "Investigación", "Soporte Técnico",
+]
+
 export default function ColleagueForm() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -18,14 +23,19 @@ export default function ColleagueForm() {
   const [form, setForm] = useState({ nombre: "", area: "", rol: "", herramientas: "", trabajaEn: "", notas: "" })
   const notasRef = useRef(null)
 
-  const AREAS = ["Desarrollo de Software", "Robótica", "Inteligencia Artificial", "Infraestructura / DevOps", "Diseño UX/UI", "Investigación", "Soporte Técnico"]
-
   useEffect(() => {
     if (!isEdit) return
     getDoc(doc(db, "companeros", id)).then(snap => {
       if (snap.exists()) {
         const d = snap.data()
-        setForm({ nombre: d.nombre || "", area: d.area || "", rol: d.rol || "", herramientas: (d.herramientas || []).join(", "), trabajaEn: d.trabajaEn || "", notas: d.notas || "" })
+        setForm({
+          nombre: d.nombre || "",
+          area: d.area || "",
+          rol: d.rol || "",
+          herramientas: (d.herramientas || []).join(", "),
+          trabajaEn: d.trabajaEn || "",
+          notas: d.notas || "",
+        })
       }
     })
   }, [id, isEdit])
@@ -51,9 +61,12 @@ export default function ColleagueForm() {
     if (!form.nombre.trim()) return
     setSaving(true)
     const data = {
-      nombre: form.nombre.trim(), area: form.area.trim(), rol: form.rol.trim(),
+      nombre: form.nombre.trim(),
+      area: form.area.trim(),
+      rol: form.rol.trim(),
       herramientas: form.herramientas.split(",").map(h => h.trim()).filter(Boolean),
-      trabajaEn: form.trabajaEn.trim(), notas: form.notas.trim(),
+      trabajaEn: form.trabajaEn.trim(),
+      notas: form.notas.trim(),
     }
     if (isEdit) {
       await updateDoc(doc(db, "companeros", id), { ...data, updatedAt: serverTimestamp() })
@@ -64,65 +77,103 @@ export default function ColleagueForm() {
     }
   }
 
-  const inputClass = "w-full bg-card border border-border rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
   const back = () => isEdit ? navigate(`/colleague/${id}`) : navigate("/dashboard")
+
+  const inputClass = "w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30 transition-all"
+  const sectionLabel = "text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-4 block"
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      <header className="bg-card border-b border-border px-8 py-4 flex justify-between items-center">
-        <button onClick={back} className="text-sm text-muted-foreground hover:text-foreground transition-colors">← Volver</button>
+
+      {/* Header */}
+      <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
+        style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
+        <button onClick={back}
+          className="text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+          ← Volver
+        </button>
         <ThemeToggle />
       </header>
 
-      <div className="max-w-2xl mx-auto px-8 py-6 w-full">
-        <h1 className="text-2xl font-bold text-foreground mb-6">{isEdit ? "Editar compañero" : "Agregar compañero"}</h1>
+      <div className="max-w-2xl mx-auto px-6 py-8 w-full">
+
+        <div className="mb-7">
+          <h1 className="text-[26px] font-bold tracking-tight text-foreground">
+            {isEdit ? "Editar compañero" : "Nuevo compañero"}
+          </h1>
+          <p className="text-[13px] text-muted-foreground mt-1">
+            {isEdit ? "Actualiza los datos del perfil." : "Completa la información para agregar al equipo."}
+          </p>
+        </div>
+
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1">Nombre *</label>
-            <input name="nombre" value={form.nombre} onChange={handleChange} placeholder="Ej: Carlos Pérez" className={inputClass} />
+
+          {/* ── Sección: Info básica ── */}
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+            <span className={sectionLabel}>Información básica</span>
+            <div>
+              <label className="block text-[13px] font-medium text-foreground mb-1.5">Nombre *</label>
+              <input name="nombre" value={form.nombre} onChange={handleChange}
+                placeholder="Ej: Carlos Pérez" className={inputClass} />
+            </div>
+            <div>
+              <label className="block text-[13px] font-medium text-foreground mb-1.5">Rol</label>
+              <input name="rol" value={form.rol} onChange={handleChange}
+                placeholder="Ej: Frontend Developer" className={inputClass} />
+            </div>
+            <div>
+              <label className="block text-[13px] font-medium text-foreground mb-1.5">Enfoque</label>
+              <input list="areas-list" name="area" value={form.area} onChange={handleChange}
+                placeholder="Ej: Robótica, Diseño UX/UI…" className={inputClass} autoComplete="off" />
+              <datalist id="areas-list">
+                {AREAS.map(a => <option key={a} value={a} />)}
+              </datalist>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1">Enfoque</label>
-            <input list="areas-list" name="area" value={form.area} onChange={handleChange} placeholder="Ej: Robótica, Diseño UX/UI, Desarrollo de Software" className={inputClass} autoComplete="off" />
-            <datalist id="areas-list">
-              {AREAS.map(a => <option key={a} value={a} />)}
-            </datalist>
+
+          {/* ── Sección: Stack y trabajo ── */}
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+            <span className={sectionLabel}>Stack y contexto</span>
+            <div>
+              <label className="block text-[13px] font-medium text-foreground mb-1.5">Herramientas / Stack</label>
+              <input name="herramientas" value={form.herramientas} onChange={handleChange}
+                placeholder="Ej: React, Node, AWS (separadas por coma)" className={inputClass} />
+            </div>
+            <div>
+              <label className="block text-[13px] font-medium text-foreground mb-1.5">¿En qué está trabajando?</label>
+              <textarea name="trabajaEn" value={form.trabajaEn} onChange={handleChange}
+                placeholder="Ej: Módulo de pagos del portal…" rows={3} className={inputClass} />
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1">Rol</label>
-            <input name="rol" value={form.rol} onChange={handleChange} placeholder="Ej: Frontend Developer" className={inputClass} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1">Herramientas / Stack</label>
-            <input name="herramientas" value={form.herramientas} onChange={handleChange} placeholder="Ej: React, Node, AWS" className={inputClass} />
-            <p className="text-xs text-muted-foreground mt-1">Separadas por coma</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1">¿En qué está trabajando?</label>
-            <textarea name="trabajaEn" value={form.trabajaEn} onChange={handleChange} placeholder="Ej: Módulo de pagos..." rows={2} className={inputClass} />
-          </div>
-          <div>
-            <div className="flex justify-between items-center mb-1">
-              <label className="block text-sm font-medium text-foreground">Notas</label>
+
+          {/* ── Sección: Notas ── */}
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className={sectionLabel + " mb-0"}>Notas</span>
               <button type="button" onClick={() => setShowEmoji(v => !v)}
                 className="text-lg leading-none hover:scale-110 transition-transform" title="Insertar emoji">
                 😊
               </button>
             </div>
             {showEmoji && (
-              <div className="mb-2">
-                <EmojiPicker onEmojiClick={handleEmojiClick} width="100%" height={350}
-                  searchPlaceholder="Buscar emoji..." skinTonesDisabled
+              <div className="rounded-xl overflow-hidden">
+                <EmojiPicker onEmojiClick={handleEmojiClick} width="100%" height={320}
+                  searchPlaceholder="Buscar emoji…" skinTonesDisabled
                   previewConfig={{ showPreview: false }} />
               </div>
             )}
             <textarea ref={notasRef} name="notas" value={form.notas} onChange={handleChange}
-              placeholder="Algo útil que quieras recordar..." rows={3} className={inputClass} />
+              placeholder="Algo útil que quieras recordar…" rows={4} className={inputClass} />
           </div>
-          <div className="flex gap-3 pt-2">
-            <Button type="submit" disabled={saving}>{saving ? "Guardando..." : isEdit ? "Actualizar" : "Guardar"}</Button>
+
+          {/* ── Actions ── */}
+          <div className="flex gap-3 pt-1">
+            <Button type="submit" disabled={saving}>
+              {saving ? "Guardando…" : isEdit ? "Actualizar" : "Guardar compañero"}
+            </Button>
             <Button type="button" variant="outline" onClick={back}>Cancelar</Button>
           </div>
+
         </form>
       </div>
       <Footer />

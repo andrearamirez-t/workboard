@@ -24,31 +24,31 @@ function parseLocalDate(str) {
   return new Date(y, m - 1, d)
 }
 
-function projectStatus(fechaEntrega) {
+function deadlineStatus(fechaEntrega) {
   const deadline = parseLocalDate(fechaEntrega)
   if (!deadline) return null
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const diff = Math.ceil((deadline - today) / 86400000)
-  if (diff < 0) return { label: "Vencido", color: "oklch(0.65 0.22 27)", bg: "oklch(0.65 0.22 27 / 0.12)" }
-  if (diff === 0) return { label: "Vence hoy", color: "oklch(0.70 0.20 55)", bg: "oklch(0.70 0.20 55 / 0.12)" }
-  if (diff <= 7) return { label: `${diff}d restantes`, color: "oklch(0.70 0.18 60)", bg: "oklch(0.70 0.18 60 / 0.12)" }
-  return { label: `${diff}d restantes`, color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" }
+  if (diff < 0)  return { label: "Vencido",      color: "oklch(0.65 0.22 27)",  bg: "oklch(0.65 0.22 27 / 0.12)"  }
+  if (diff === 0) return { label: "Vence hoy",    color: "oklch(0.70 0.20 55)",  bg: "oklch(0.70 0.20 55 / 0.12)"  }
+  if (diff <= 7)  return { label: `${diff}d`,     color: "oklch(0.70 0.18 60)",  bg: "oklch(0.70 0.18 60 / 0.12)"  }
+  return            { label: `${diff}d restantes`, color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" }
 }
 
 const PROJECT_STATE_STYLE = {
-  "Planificación":  { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.12)" },
-  "En desarrollo":  { color: "oklch(0.60 0.18 290)", bg: "oklch(0.60 0.18 290 / 0.12)" },
-  "En revisión":    { color: "oklch(0.68 0.18 55)",  bg: "oklch(0.68 0.18 55 / 0.12)"  },
-  "Completado":     { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" },
-  "Pausado":        { color: "oklch(0.55 0.04 290)", bg: "oklch(0.55 0.04 290 / 0.12)" },
+  "Planificación": { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.12)" },
+  "En desarrollo": { color: "oklch(0.60 0.18 290)", bg: "oklch(0.60 0.18 290 / 0.12)" },
+  "En revisión":   { color: "oklch(0.68 0.18 55)",  bg: "oklch(0.68 0.18 55 / 0.12)"  },
+  "Completado":    { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" },
+  "Pausado":       { color: "oklch(0.55 0.04 270)", bg: "oklch(0.55 0.04 270 / 0.12)" },
 }
 
 const VERSION_STATE_STYLE = {
-  "Pendiente":  { color: "oklch(0.55 0.04 290)", bg: "oklch(0.55 0.04 290 / 0.12)" },
-  "En curso":   { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.12)" },
-  "Entregado":  { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" },
-  "Cancelado":  { color: "oklch(0.65 0.22 27)",  bg: "oklch(0.65 0.22 27 / 0.12)"  },
+  "Pendiente": { color: "oklch(0.55 0.04 270)", bg: "oklch(0.55 0.04 270 / 0.12)" },
+  "En curso":  { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.12)" },
+  "Entregado": { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" },
+  "Cancelado": { color: "oklch(0.65 0.22 27)",  bg: "oklch(0.65 0.22 27 / 0.12)"  },
 }
 
 export default function ColleagueDetail() {
@@ -128,7 +128,7 @@ export default function ColleagueDetail() {
 
   if (!companero) return (
     <div className="min-h-screen bg-background flex items-center justify-center">
-      <p className="text-muted-foreground">Cargando...</p>
+      <p className="text-muted-foreground text-sm">Cargando…</p>
     </div>
   )
 
@@ -137,78 +137,95 @@ export default function ColleagueDetail() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
 
-      <header className="bg-card border-b border-border px-8 py-4 flex justify-between items-center sticky top-0 z-10">
+      {/* ── Header ── */}
+      <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
+        style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
         <button onClick={() => navigate("/dashboard")}
-          className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+          className="text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors">
           ← Volver
         </button>
         <ThemeToggle />
       </header>
 
-      {/* Hero */}
-      <div className="relative overflow-hidden px-8 py-10"
-        style={{ background: `linear-gradient(135deg, oklch(0.24 0.045 ${h}), oklch(0.22 0.04 ${(h + 25) % 360}))` }}>
-        <div className="absolute inset-0 opacity-20"
-          style={{ background: `radial-gradient(ellipse at top right, oklch(0.70 0.15 ${h}), transparent 60%)` }} />
-        <div className="max-w-4xl mx-auto w-full relative flex flex-col sm:flex-row sm:items-center gap-5">
-          <div className="w-16 h-16 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-2xl"
-            style={{
-              background: `linear-gradient(135deg, oklch(0.65 0.16 ${h}), oklch(0.52 0.20 ${(h + 35) % 360}))`,
-              boxShadow: `0 8px 24px oklch(0.55 0.18 ${h} / 40%)`,
-            }}>
-            {companero.nombre?.charAt(0).toUpperCase()}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-2xl font-bold text-white leading-tight">{companero.nombre}</h1>
-            <p className="text-sm mt-0.5" style={{ color: `oklch(0.78 0.07 ${h})` }}>
-              {companero.rol || "Sin rol registrado"}
-            </p>
-            {companero.area && (
-              <span className="inline-block text-xs font-semibold px-2.5 py-1 rounded-full mt-2"
-                style={{ backgroundColor: `oklch(0.30 0.06 ${h})`, color: `oklch(0.88 0.10 ${h})` }}>
-                {companero.area}
-              </span>
-            )}
-          </div>
-          <div className="flex gap-2 flex-shrink-0">
-            <button onClick={() => navigate(`/colleague/${id}/edit`)}
-              className="text-xs font-semibold px-4 py-2 rounded-xl border transition-all"
+      {/* ── Hero ── */}
+      <div className="relative overflow-hidden px-6 py-12"
+        style={{ background: `linear-gradient(145deg, oklch(0.20 0.050 ${h}), oklch(0.15 0.035 ${(h + 30) % 360}))` }}>
+
+        {/* Background glow */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 right-0 w-72 h-72 opacity-30"
+            style={{ background: `radial-gradient(circle at top right, oklch(0.72 0.18 ${h}), transparent 65%)`, filter: "blur(40px)" }} />
+          <div className="absolute bottom-0 left-0 w-48 h-48 opacity-20"
+            style={{ background: `radial-gradient(circle, oklch(0.65 0.16 ${(h + 50) % 360}), transparent 65%)`, filter: "blur(30px)" }} />
+        </div>
+
+        <div className="max-w-4xl mx-auto w-full relative">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-5">
+
+            {/* Avatar */}
+            <div className="w-20 h-20 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-3xl"
               style={{
-                borderColor: `oklch(0.55 0.14 ${h} / 0.45)`,
-                color: `oklch(0.88 0.08 ${h})`,
-                backgroundColor: `oklch(0.30 0.06 ${h} / 0.30)`,
+                background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))`,
+                boxShadow: `0 12px 32px oklch(0.55 0.20 ${h} / 45%), 0 0 0 2px oklch(0.72 0.14 ${h} / 30%)`,
               }}>
-              Editar
-            </button>
-            <button onClick={handleDelete}
-              className="text-xs font-semibold px-4 py-2 rounded-xl text-white transition-all hover:opacity-80"
-              style={{ backgroundColor: "oklch(0.50 0.20 27)" }}>
-              Eliminar
-            </button>
+              {companero.nombre?.charAt(0).toUpperCase()}
+            </div>
+
+            {/* Info */}
+            <div className="flex-1 min-w-0">
+              <h1 className="text-[28px] font-bold text-white leading-tight tracking-tight">{companero.nombre}</h1>
+              <p className="text-[14px] mt-1" style={{ color: `oklch(0.78 0.08 ${h})` }}>
+                {companero.rol || "Sin rol registrado"}
+              </p>
+              {companero.area && (
+                <span className="inline-block text-[11px] font-semibold px-3 py-1 rounded-full mt-2.5"
+                  style={{ backgroundColor: `oklch(0.28 0.06 ${h})`, color: `oklch(0.88 0.10 ${h})` }}>
+                  {companero.area}
+                </span>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2 flex-shrink-0">
+              <button onClick={() => navigate(`/colleague/${id}/edit`)}
+                className="text-[12px] font-semibold px-4 py-2 rounded-xl border transition-all"
+                style={{
+                  borderColor: `oklch(0.55 0.14 ${h} / 0.4)`,
+                  color: `oklch(0.88 0.08 ${h})`,
+                  backgroundColor: `oklch(0.28 0.06 ${h} / 0.35)`,
+                }}>
+                Editar
+              </button>
+              <button onClick={handleDelete}
+                className="text-[12px] font-semibold px-4 py-2 rounded-xl text-white transition-all hover:opacity-80"
+                style={{ backgroundColor: "oklch(0.48 0.20 27)" }}>
+                Eliminar
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      <main className="max-w-4xl mx-auto px-8 py-8 w-full flex-1 space-y-8">
+      <main className="max-w-4xl mx-auto px-6 py-8 w-full flex-1 space-y-6">
 
-        {/* Info principal */}
+        {/* ── Info principal ── */}
         {(companero.trabajaEn || companero.herramientas?.length > 0 || companero.notas) && (
           <div className="bg-card border border-border rounded-2xl overflow-hidden"
-            style={{ borderLeftColor: `oklch(0.60 0.18 ${h})`, borderLeftWidth: "4px" }}>
-            <div className="p-6 space-y-4">
+            style={{ borderLeftColor: `oklch(0.60 0.18 ${h})`, borderLeftWidth: "3px" }}>
+            <div className="p-6 space-y-5">
               {companero.trabajaEn && (
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Trabajando en</p>
-                  <p className="text-sm text-foreground leading-relaxed">{companero.trabajaEn}</p>
+                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Trabajando en</p>
+                  <p className="text-[14px] text-foreground leading-relaxed">{companero.trabajaEn}</p>
                 </div>
               )}
               {companero.herramientas?.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Herramientas</p>
+                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Herramientas</p>
                   <div className="flex flex-wrap gap-1.5">
                     {companero.herramientas.map(tool => (
-                      <span key={tool} className="text-xs px-2.5 py-1 rounded-full font-medium"
-                        style={{ backgroundColor: `oklch(0.32 0.045 ${h})`, color: `oklch(0.82 0.08 ${h})` }}>
+                      <span key={tool} className="text-[12px] px-2.5 py-1 rounded-lg font-medium"
+                        style={{ backgroundColor: `oklch(0.60 0.18 ${h} / 0.10)`, color: `oklch(0.48 0.18 ${h})` }}>
                         {tool}
                       </span>
                     ))}
@@ -217,102 +234,112 @@ export default function ColleagueDetail() {
               )}
               {companero.notas && (
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Notas</p>
-                  <p className="text-sm text-foreground leading-relaxed">{companero.notas}</p>
+                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Notas</p>
+                  <p className="text-[14px] text-foreground leading-relaxed">{companero.notas}</p>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* Proyectos */}
+        {/* ── Proyectos ── */}
         <div>
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-bold text-foreground">Proyectos</h2>
-            <Button size="sm" onClick={() => navigate(`/colleague/${id}/project/new`)}>+ Agregar proyecto</Button>
+            <h2 className="text-[18px] font-bold text-foreground tracking-tight">Proyectos</h2>
+            <Button size="sm" className="text-[13px] h-8" onClick={() => navigate(`/colleague/${id}/project/new`)}>
+              + Proyecto
+            </Button>
           </div>
+
           {companero.proyectos?.length > 0 ? (
             <div className="space-y-3">
               {companero.proyectos.map((proyecto, index) => {
                 const pH = (h + index * 55) % 360
+                const pState = proyecto.estado ? PROJECT_STATE_STYLE[proyecto.estado] : null
                 return (
                   <div key={index} className="bg-card border border-border rounded-2xl overflow-hidden group"
-                    style={{ borderLeftColor: `oklch(0.60 0.16 ${pH})`, borderLeftWidth: "4px" }}>
+                    style={{ borderLeftColor: `oklch(0.60 0.16 ${pH})`, borderLeftWidth: "3px" }}>
                     <div className="p-5">
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
+
+                      {/* Project header */}
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex-1 min-w-0 mr-4">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="font-bold text-foreground text-base">{proyecto.nombre}</h3>
-                            {proyecto.estado && PROJECT_STATE_STYLE[proyecto.estado] && (
-                              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full"
-                                style={{ color: PROJECT_STATE_STYLE[proyecto.estado].color, backgroundColor: PROJECT_STATE_STYLE[proyecto.estado].bg }}>
+                            <h3 className="font-bold text-foreground text-[15px] leading-tight">{proyecto.nombre}</h3>
+                            {pState && (
+                              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full flex-shrink-0"
+                                style={{ color: pState.color, backgroundColor: pState.bg }}>
                                 {proyecto.estado}
                               </span>
                             )}
                           </div>
                           {proyecto.area && (
-                            <span className="inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1"
-                              style={{ backgroundColor: `oklch(0.34 0.06 ${pH})`, color: `oklch(0.85 0.10 ${pH})` }}>
+                            <span className="inline-block text-[11px] font-medium px-2 py-0.5 rounded-full mt-1.5"
+                              style={{ backgroundColor: `oklch(0.34 0.06 ${pH} / 0.15)`, color: `oklch(0.85 0.10 ${pH})` }}>
                               {proyecto.area}
                             </span>
                           )}
                         </div>
-                        <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                           <button
                             onClick={() => navigate(`/colleague/${id}/project/new`, { state: { editProject: proyecto } })}
-                            className="text-xs font-medium hover:opacity-70"
-                            style={{ color: `oklch(0.65 0.14 ${pH})` }}>
+                            className="text-[12px] font-medium hover:opacity-70 transition-opacity"
+                            style={{ color: `oklch(0.62 0.14 ${pH})` }}>
                             Editar
                           </button>
                           <button onClick={() => handleDeleteProject(proyecto)}
-                            className="text-xs text-destructive hover:opacity-70">
+                            className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
                             Eliminar
                           </button>
                         </div>
                       </div>
+
+                      {/* Content */}
                       {proyecto.queHace && (
-                        <p className="text-sm text-muted-foreground mb-2 leading-relaxed">
+                        <p className="text-[13px] text-muted-foreground mb-2.5 leading-relaxed">
                           <span className="font-semibold text-foreground">Qué hace: </span>{proyecto.queHace}
                         </p>
                       )}
+
                       {proyecto.herramientas?.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mb-2">
+                        <div className="flex flex-wrap gap-1.5 mb-2.5">
                           {proyecto.herramientas.map(tool => (
-                            <span key={tool} className="text-xs px-2.5 py-0.5 rounded-full font-medium"
-                              style={{ backgroundColor: `oklch(0.32 0.04 ${pH})`, color: `oklch(0.82 0.08 ${pH})` }}>
+                            <span key={tool} className="text-[11px] px-2.5 py-0.5 rounded-lg font-medium"
+                              style={{ backgroundColor: `oklch(0.34 0.04 ${pH} / 0.15)`, color: `oklch(0.80 0.08 ${pH})` }}>
                               {tool}
                             </span>
                           ))}
                         </div>
                       )}
+
                       {proyecto.observaciones && (
-                        <p className="text-sm text-muted-foreground leading-relaxed">
+                        <p className="text-[13px] text-muted-foreground leading-relaxed mb-2.5">
                           <span className="font-semibold text-foreground">Observaciones: </span>{proyecto.observaciones}
                         </p>
                       )}
 
-                      {/* Timeline de fechas */}
+                      {/* Timeline */}
                       {(proyecto.fechaInicio || proyecto.fechaEntrega || proyecto.versiones?.length > 0) && (
-                        <div className="mt-3 pt-3 border-t border-border">
+                        <div className="mt-3 pt-3 border-t border-border space-y-2">
                           <div className="flex flex-wrap gap-x-5 gap-y-1.5">
                             {proyecto.fechaInicio && (
                               <div className="flex items-center gap-1.5">
-                                <span className="text-xs text-muted-foreground">Inicio:</span>
-                                <span className="text-xs font-medium text-foreground">
+                                <span className="text-[11px] text-muted-foreground">Inicio:</span>
+                                <span className="text-[11px] font-semibold text-foreground">
                                   {format(parseLocalDate(proyecto.fechaInicio), "d MMM yyyy", { locale: es })}
                                 </span>
                               </div>
                             )}
                             {proyecto.fechaEntrega && (() => {
-                              const st = projectStatus(proyecto.fechaEntrega)
+                              const st = deadlineStatus(proyecto.fechaEntrega)
                               return (
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-xs text-muted-foreground">Entrega:</span>
-                                  <span className="text-xs font-medium text-foreground">
+                                  <span className="text-[11px] text-muted-foreground">Entrega:</span>
+                                  <span className="text-[11px] font-semibold text-foreground">
                                     {format(parseLocalDate(proyecto.fechaEntrega), "d MMM yyyy", { locale: es })}
                                   </span>
                                   {st && (
-                                    <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
                                       style={{ color: st.color, backgroundColor: st.bg }}>
                                       {st.label}
                                     </span>
@@ -321,16 +348,24 @@ export default function ColleagueDetail() {
                               )
                             })()}
                           </div>
+
                           {proyecto.versiones?.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mt-2">
+                            <div className="flex flex-wrap gap-1.5">
                               {proyecto.versiones.map((v, vi) => {
                                 const vStyle = v.estado ? VERSION_STATE_STYLE[v.estado] : null
                                 return (
-                                  <span key={vi} className="text-xs px-2.5 py-1 rounded-full border border-border text-muted-foreground flex items-center gap-1.5"
-                                    style={vStyle ? { borderColor: vStyle.color + "55", backgroundColor: vStyle.bg } : {}}>
-                                    <span className="font-semibold" style={{ color: vStyle ? vStyle.color : `oklch(0.72 0.12 ${pH})` }}>{v.nombre}</span>
-                                    {v.fecha && <span className="opacity-70">— {format(parseLocalDate(v.fecha), "d MMM", { locale: es })}</span>}
-                                    {v.estado && <span className="font-bold" style={{ color: vStyle?.color }}>· {v.estado}</span>}
+                                  <span key={vi}
+                                    className="text-[11px] px-2.5 py-1 rounded-lg border border-border text-muted-foreground flex items-center gap-1.5"
+                                    style={vStyle ? { borderColor: vStyle.color + "44", backgroundColor: vStyle.bg } : {}}>
+                                    <span className="font-semibold" style={{ color: vStyle ? vStyle.color : `oklch(0.70 0.12 ${pH})` }}>
+                                      {v.nombre}
+                                    </span>
+                                    {v.fecha && (
+                                      <span className="opacity-70">— {format(parseLocalDate(v.fecha), "d MMM", { locale: es })}</span>
+                                    )}
+                                    {v.estado && (
+                                      <span className="font-bold" style={{ color: vStyle?.color }}>· {v.estado}</span>
+                                    )}
                                   </span>
                                 )
                               })}
@@ -338,48 +373,50 @@ export default function ColleagueDetail() {
                           )}
                         </div>
                       )}
+
                     </div>
                   </div>
                 )
               })}
             </div>
           ) : (
-            <div className="text-center py-10 text-muted-foreground bg-card border border-border rounded-2xl">
-              <p className="text-sm">Sin proyectos registrados.</p>
+            <div className="text-center py-12 text-muted-foreground bg-card border border-border rounded-2xl">
+              <p className="text-[13px]">Sin proyectos registrados.</p>
             </div>
           )}
         </div>
 
-        {/* Bitácora */}
+        {/* ── Bitácora ── */}
         <div>
-          <h2 className="text-lg font-bold text-foreground mb-4">Bitácora</h2>
+          <h2 className="text-[18px] font-bold text-foreground tracking-tight mb-4">Bitácora</h2>
 
-          <form onSubmit={handleAddLog}
-            className="bg-card border border-border rounded-2xl p-5 mb-4"
+          <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
             style={{ borderTopColor: `oklch(0.60 0.16 ${h})`, borderTopWidth: "3px" }}>
-            <div className="flex justify-end mb-2">
-              <button type="button" onClick={() => setShowEmoji(v => !v)}
-                className="text-lg leading-none hover:scale-110 transition-transform" title="Insertar emoji">
-                😊
-              </button>
-            </div>
-            {showEmoji && (
-              <div className="mb-3">
-                <EmojiPicker onEmojiClick={handleEmojiClick} width="100%" height={350}
-                  searchPlaceholder="Buscar emoji..." skinTonesDisabled
-                  previewConfig={{ showPreview: false }} />
+            <form onSubmit={handleAddLog} className="p-5">
+              <div className="flex justify-end mb-2.5">
+                <button type="button" onClick={() => setShowEmoji(v => !v)}
+                  className="text-lg leading-none hover:scale-110 transition-transform" title="Insertar emoji">
+                  😊
+                </button>
               </div>
-            )}
-            <textarea ref={notaRef} value={nota} onChange={e => setNota(e.target.value)}
-              placeholder="¿Qué está haciendo esta semana?"
-              rows={3}
-              className="w-full bg-background border border-border rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground mb-3 focus:outline-none focus:ring-1 focus:ring-ring resize-none" />
-            <button type="submit" disabled={saving}
-              className="text-sm font-semibold px-5 py-2 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-50"
-              style={{ background: `linear-gradient(135deg, oklch(0.58 0.18 ${h}), oklch(0.52 0.20 ${(h + 25) % 360}))` }}>
-              {saving ? "Guardando..." : "Guardar nota"}
-            </button>
-          </form>
+              {showEmoji && (
+                <div className="mb-3 rounded-xl overflow-hidden">
+                  <EmojiPicker onEmojiClick={handleEmojiClick} width="100%" height={330}
+                    searchPlaceholder="Buscar emoji…" skinTonesDisabled
+                    previewConfig={{ showPreview: false }} />
+                </div>
+              )}
+              <textarea ref={notaRef} value={nota} onChange={e => setNota(e.target.value)}
+                placeholder="¿Qué está haciendo esta semana?"
+                rows={3}
+                className="w-full bg-muted/50 border border-border rounded-xl px-4 py-3 text-[14px] text-foreground placeholder:text-muted-foreground mb-3 focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none transition-all" />
+              <button type="submit" disabled={saving}
+                className="text-[13px] font-semibold px-5 py-2 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-50"
+                style={{ background: `linear-gradient(135deg, oklch(0.58 0.20 ${h}), oklch(0.50 0.22 ${(h + 25) % 360}))` }}>
+                {saving ? "Guardando…" : "Guardar nota"}
+              </button>
+            </form>
+          </div>
 
           {logs.length > 0 ? (
             <div className="space-y-2">
@@ -387,44 +424,41 @@ export default function ColleagueDetail() {
                 <div key={log.id} className="bg-card border border-border rounded-xl p-4 group">
                   {editingLogId === log.id ? (
                     <div className="space-y-2">
-                      <textarea
-                        value={editingLogText}
-                        onChange={e => setEditingLogText(e.target.value)}
+                      <textarea value={editingLogText} onChange={e => setEditingLogText(e.target.value)}
                         rows={3}
-                        className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
-                      />
+                        className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none" />
                       <div className="flex gap-2">
                         <button onClick={() => handleSaveEditLog(log.id)}
-                          className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white"
+                          className="text-[12px] font-semibold px-3.5 py-1.5 rounded-lg text-white"
                           style={{ backgroundColor: `oklch(0.55 0.16 ${h})` }}>
                           Guardar
                         </button>
                         <button onClick={() => setEditingLogId(null)}
-                          className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground">
+                          className="text-[12px] font-medium px-3.5 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors">
                           Cancelar
                         </button>
                       </div>
                     </div>
                   ) : (
                     <div className="flex gap-3">
-                      <div className="w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0"
+                      <div className="w-1.5 h-1.5 rounded-full mt-[7px] flex-shrink-0"
                         style={{ backgroundColor: `oklch(0.62 0.16 ${h})` }} />
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm text-foreground leading-relaxed">{log.nota}</p>
+                        <p className="text-[14px] text-foreground leading-relaxed">{log.nota}</p>
                         <div className="flex justify-between items-center mt-1.5">
-                          <p className="text-xs text-muted-foreground capitalize">
+                          <p className="text-[11px] text-muted-foreground capitalize">
                             {log.createdAt?.toDate
                               ? format(log.createdAt.toDate(), "EEEE d 'de' MMMM, yyyy", { locale: es })
                               : ""}
                           </p>
                           <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button onClick={() => handleStartEditLog(log)}
-                              className="text-xs font-medium hover:opacity-70"
-                              style={{ color: `oklch(0.65 0.14 ${h})` }}>
+                              className="text-[12px] font-medium hover:opacity-70 transition-opacity"
+                              style={{ color: `oklch(0.62 0.14 ${h})` }}>
                               Editar
                             </button>
                             <button onClick={() => handleDeleteLog(log.id)}
-                              className="text-xs text-destructive hover:opacity-70">
+                              className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
                               Eliminar
                             </button>
                           </div>
@@ -436,8 +470,8 @@ export default function ColleagueDetail() {
               ))}
             </div>
           ) : (
-            <div className="text-center py-10 text-muted-foreground bg-card border border-border rounded-2xl">
-              <p className="text-sm">Sin notas aún. Agrega la primera.</p>
+            <div className="text-center py-12 text-muted-foreground bg-card border border-border rounded-2xl">
+              <p className="text-[13px]">Sin notas aún. Agrega la primera.</p>
             </div>
           )}
         </div>
