@@ -24,7 +24,7 @@ export default function Bitacora() {
   const [editingText, setEditingText] = useState("")
 
   const load = async () => {
-    const [allLogs, colleagues] = await Promise.all([getAllLogs(user.uid), getColleagues(user)])
+    const [allLogs, colleagues] = await Promise.all([getAllLogs(), getColleagues()])
     const map = {}
     colleagues.forEach(c => { map[c.id] = c })
     setColleagueMap(map)

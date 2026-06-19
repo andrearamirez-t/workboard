@@ -18,9 +18,8 @@ export const getLogs = async (colleagueId) => {
   return logs.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
 }
 
-export const getAllLogs = async (userId) => {
-  const q = query(collection(db, "logs"), where("creadoPor", "==", userId))
-  const snapshot = await getDocs(q)
+export const getAllLogs = async () => {
+  const snapshot = await getDocs(collection(db, "logs"))
   const logs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
   return logs.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
 }

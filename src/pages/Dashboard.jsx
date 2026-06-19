@@ -32,12 +32,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!user) return
-    getColleagues(user).then(setColleagues)
+    getColleagues().then(setColleagues)
   }, [user])
 
   const handleExport = async (type) => {
     setExporting(type)
-    const logs = await getAllLogs(user.uid)
+    const logs = await getAllLogs()
     if (type === "pdf") exportPDF(colleagues, logs)
     else exportExcel(colleagues, logs)
     setExporting(null)

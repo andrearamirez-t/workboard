@@ -1,9 +1,8 @@
-import { collection, getDocs, getDoc, query, where, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, arrayRemove } from "firebase/firestore"
+import { collection, getDocs, getDoc, updateDoc, deleteDoc, doc, arrayRemove } from "firebase/firestore"
 import { db } from "@/services/firebase"
 
-export const getColleagues = async (user) => {
-  const q = query(collection(db, "companeros"), where("creadoPor", "==", user.uid))
-  const snapshot = await getDocs(q)
+export const getColleagues = async () => {
+  const snapshot = await getDocs(collection(db, "companeros"))
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
 }
 
