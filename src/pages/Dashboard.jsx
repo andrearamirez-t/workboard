@@ -2,6 +2,8 @@ import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { getColleagues } from "@/services/colleagues.service"
+import { getAllLogs } from "@/services/logs.service"
+import { exportPDF, exportExcel } from "@/utils/exportReport"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
@@ -40,11 +42,20 @@ export default function Dashboard() {
   const [colleagues, setColleagues] = useState([])
   const [areaFilter, setAreaFilter] = useState("Todas")
   const [hoveredId, setHoveredId] = useState(null)
+  const [exporting, setExporting] = useState(null)
 
   useEffect(() => {
     if (!user) return
     getColleagues(user).then(setColleagues)
   }, [user])
+
+  const handleExport = async (type) => {
+    setExporting(type)
+    const logs = await getAllLogs(user.uid)
+    if (type === "pdf") exportPDF(colleagues, logs)
+    else exportExcel(colleagues, logs)
+    setExporting(null)
+  }
 
   const areaCount = colleagues.reduce((acc, c) => {
     if (c.area) acc[c.area] = (acc[c.area] || 0) + 1
@@ -72,7 +83,17 @@ export default function Dashboard() {
             <h2 className="text-2xl font-bold text-foreground">Mi equipo</h2>
             <p className="text-sm text-muted-foreground mt-0.5">{colleagues.length} persona{colleagues.length !== 1 ? "s" : ""} registrada{colleagues.length !== 1 ? "s" : ""}</p>
           </div>
-          <Button size="sm" onClick={() => navigate("/colleague/new")}>+ Agregar compañero</Button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => handleExport("pdf")} disabled={!!exporting}
+              className="text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-50">
+              {exporting === "pdf" ? "Generando..." : "↓ PDF"}
+            </button>
+            <button onClick={() => handleExport("xlsx")} disabled={!!exporting}
+              className="text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-50">
+              {exporting === "xlsx" ? "Generando..." : "↓ Excel"}
+            </button>
+            <Button size="sm" onClick={() => navigate("/colleague/new")}>+ Agregar compañero</Button>
+          </div>
         </div>
 
         {/* Filtro por enfoque */}

@@ -18,6 +18,39 @@ function hashHue(str) {
   return Math.abs(h * 137.508) % 360
 }
 
+function parseLocalDate(str) {
+  if (!str) return null
+  const [y, m, d] = str.split("-").map(Number)
+  return new Date(y, m - 1, d)
+}
+
+function projectStatus(fechaEntrega) {
+  const deadline = parseLocalDate(fechaEntrega)
+  if (!deadline) return null
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const diff = Math.ceil((deadline - today) / 86400000)
+  if (diff < 0) return { label: "Vencido", color: "oklch(0.65 0.22 27)", bg: "oklch(0.65 0.22 27 / 0.12)" }
+  if (diff === 0) return { label: "Vence hoy", color: "oklch(0.70 0.20 55)", bg: "oklch(0.70 0.20 55 / 0.12)" }
+  if (diff <= 7) return { label: `${diff}d restantes`, color: "oklch(0.70 0.18 60)", bg: "oklch(0.70 0.18 60 / 0.12)" }
+  return { label: `${diff}d restantes`, color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" }
+}
+
+const PROJECT_STATE_STYLE = {
+  "Planificación":  { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.12)" },
+  "En desarrollo":  { color: "oklch(0.60 0.18 290)", bg: "oklch(0.60 0.18 290 / 0.12)" },
+  "En revisión":    { color: "oklch(0.68 0.18 55)",  bg: "oklch(0.68 0.18 55 / 0.12)"  },
+  "Completado":     { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" },
+  "Pausado":        { color: "oklch(0.55 0.04 290)", bg: "oklch(0.55 0.04 290 / 0.12)" },
+}
+
+const VERSION_STATE_STYLE = {
+  "Pendiente":  { color: "oklch(0.55 0.04 290)", bg: "oklch(0.55 0.04 290 / 0.12)" },
+  "En curso":   { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.12)" },
+  "Entregado":  { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" },
+  "Cancelado":  { color: "oklch(0.65 0.22 27)",  bg: "oklch(0.65 0.22 27 / 0.12)"  },
+}
+
 export default function ColleagueDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -208,7 +241,15 @@ export default function ColleagueDetail() {
                     <div className="p-5">
                       <div className="flex justify-between items-start mb-2">
                         <div>
-                          <h3 className="font-bold text-foreground text-base">{proyecto.nombre}</h3>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-bold text-foreground text-base">{proyecto.nombre}</h3>
+                            {proyecto.estado && PROJECT_STATE_STYLE[proyecto.estado] && (
+                              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full"
+                                style={{ color: PROJECT_STATE_STYLE[proyecto.estado].color, backgroundColor: PROJECT_STATE_STYLE[proyecto.estado].bg }}>
+                                {proyecto.estado}
+                              </span>
+                            )}
+                          </div>
                           {proyecto.area && (
                             <span className="inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-1"
                               style={{ backgroundColor: `oklch(0.34 0.06 ${pH})`, color: `oklch(0.85 0.10 ${pH})` }}>
@@ -248,6 +289,54 @@ export default function ColleagueDetail() {
                         <p className="text-sm text-muted-foreground leading-relaxed">
                           <span className="font-semibold text-foreground">Observaciones: </span>{proyecto.observaciones}
                         </p>
+                      )}
+
+                      {/* Timeline de fechas */}
+                      {(proyecto.fechaInicio || proyecto.fechaEntrega || proyecto.versiones?.length > 0) && (
+                        <div className="mt-3 pt-3 border-t border-border">
+                          <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+                            {proyecto.fechaInicio && (
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs text-muted-foreground">Inicio:</span>
+                                <span className="text-xs font-medium text-foreground">
+                                  {format(parseLocalDate(proyecto.fechaInicio), "d MMM yyyy", { locale: es })}
+                                </span>
+                              </div>
+                            )}
+                            {proyecto.fechaEntrega && (() => {
+                              const st = projectStatus(proyecto.fechaEntrega)
+                              return (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-xs text-muted-foreground">Entrega:</span>
+                                  <span className="text-xs font-medium text-foreground">
+                                    {format(parseLocalDate(proyecto.fechaEntrega), "d MMM yyyy", { locale: es })}
+                                  </span>
+                                  {st && (
+                                    <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+                                      style={{ color: st.color, backgroundColor: st.bg }}>
+                                      {st.label}
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            })()}
+                          </div>
+                          {proyecto.versiones?.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {proyecto.versiones.map((v, vi) => {
+                                const vStyle = v.estado ? VERSION_STATE_STYLE[v.estado] : null
+                                return (
+                                  <span key={vi} className="text-xs px-2.5 py-1 rounded-full border border-border text-muted-foreground flex items-center gap-1.5"
+                                    style={vStyle ? { borderColor: vStyle.color + "55", backgroundColor: vStyle.bg } : {}}>
+                                    <span className="font-semibold" style={{ color: vStyle ? vStyle.color : `oklch(0.72 0.12 ${pH})` }}>{v.nombre}</span>
+                                    {v.fecha && <span className="opacity-70">— {format(parseLocalDate(v.fecha), "d MMM", { locale: es })}</span>}
+                                    {v.estado && <span className="font-bold" style={{ color: vStyle?.color }}>· {v.estado}</span>}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
