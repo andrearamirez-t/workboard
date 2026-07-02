@@ -171,17 +171,19 @@ export default function Bitacora() {
                                   <p className="text-[11px] text-muted-foreground capitalize">
                                     {log.createdAt?.toDate ? format(log.createdAt.toDate(), "EEEE d 'de' MMMM", { locale: es }) : ""}
                                   </p>
-                                  <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button onClick={() => { setEditingId(log.id); setEditingText(log.nota) }}
-                                      className="text-[12px] font-medium hover:opacity-70 transition-opacity"
-                                      style={{ color: `oklch(0.60 0.14 ${h})` }}>
-                                      Editar
-                                    </button>
-                                    <button onClick={() => handleDeleteLog(log.id)}
-                                      className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
-                                      Eliminar
-                                    </button>
-                                  </div>
+                                  {log.creadoPor === user?.uid && (
+                                    <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button onClick={() => { setEditingId(log.id); setEditingText(log.nota) }}
+                                        className="text-[12px] font-medium hover:opacity-70 transition-opacity"
+                                        style={{ color: `oklch(0.60 0.14 ${h})` }}>
+                                        Editar
+                                      </button>
+                                      <button onClick={() => handleDeleteLog(log.id)}
+                                        className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
+                                        Eliminar
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               </>
                             )}

@@ -4,6 +4,7 @@ import { doc, getDoc } from "firebase/firestore"
 import { db } from "@/services/firebase"
 import { deleteColleague, deleteProject } from "@/services/colleagues.service"
 import { addLog, getLogs, deleteLog, updateLog } from "@/services/logs.service"
+import { addFeedback, getFeedback, deleteFeedback, updateFeedback } from "@/services/feedback.service"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
@@ -11,6 +12,8 @@ import { format } from "date-fns"
 import { es } from "date-fns/locale"
 import EmojiPicker from "emoji-picker-react"
 import { Footer } from "@/components/ui/Footer"
+
+const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
 function hashHue(str) {
   let h = 0
@@ -54,7 +57,11 @@ const VERSION_STATE_STYLE = {
 export default function ColleagueDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, myColleagueId } = useAuth()
+  const isOwn = id === myColleagueId
+  const isAdmin = ADMIN_EMAILS.includes(user?.email)
+  const canEdit = isOwn || isAdmin
+
   const [companero, setCompanero] = useState(null)
   const [logs, setLogs] = useState([])
   const [nota, setNota] = useState("")
@@ -62,7 +69,15 @@ export default function ColleagueDetail() {
   const [editingLogId, setEditingLogId] = useState(null)
   const [editingLogText, setEditingLogText] = useState("")
   const [showEmoji, setShowEmoji] = useState(false)
+  const [projectSearch, setProjectSearch] = useState("")
+  const [logSearch, setLogSearch] = useState("")
   const notaRef = useRef(null)
+
+  const [feedback, setFeedback] = useState([])
+  const [feedbackText, setFeedbackText] = useState("")
+  const [savingFeedback, setSavingFeedback] = useState(false)
+  const [editingFbId, setEditingFbId] = useState(null)
+  const [editingFbText, setEditingFbText] = useState("")
 
   const loadData = async () => {
     const snap = await getDoc(doc(db, "companeros", id))
@@ -71,6 +86,10 @@ export default function ColleagueDetail() {
   }
 
   useEffect(() => { loadData() }, [id])
+
+  useEffect(() => {
+    if (isOwn || isAdmin) getFeedback(id).then(setFeedback)
+  }, [id, isOwn, isAdmin])
 
   const handleDelete = async () => {
     if (!confirm(`¿Eliminar a ${companero.nombre}? No se puede deshacer.`)) return
@@ -124,6 +143,29 @@ export default function ColleagueDetail() {
     await updateLog(logId, editingLogText.trim())
     setLogs(prev => prev.map(l => l.id === logId ? { ...l, nota: editingLogText.trim() } : l))
     setEditingLogId(null)
+  }
+
+  const handleAddFeedback = async (e) => {
+    e.preventDefault()
+    if (!feedbackText.trim()) return
+    setSavingFeedback(true)
+    await addFeedback(id, feedbackText.trim(), user)
+    setFeedbackText("")
+    setFeedback(await getFeedback(id))
+    setSavingFeedback(false)
+  }
+
+  const handleDeleteFeedback = async (fbId) => {
+    if (!confirm("¿Eliminar esta retroalimentación?")) return
+    await deleteFeedback(id, fbId)
+    setFeedback(prev => prev.filter(f => f.id !== fbId))
+  }
+
+  const handleSaveEditFeedback = async (fbId) => {
+    if (!editingFbText.trim()) return
+    await updateFeedback(id, fbId, editingFbText.trim())
+    setFeedback(prev => prev.map(f => f.id === fbId ? { ...f, texto: editingFbText.trim() } : f))
+    setEditingFbId(null)
   }
 
   if (!companero) return (
@@ -185,23 +227,25 @@ export default function ColleagueDetail() {
               )}
             </div>
 
-            {/* Actions */}
-            <div className="flex gap-2 flex-shrink-0">
-              <button onClick={() => navigate(`/colleague/${id}/edit`)}
-                className="text-[12px] font-semibold px-4 py-2 rounded-xl border transition-all"
-                style={{
-                  borderColor: `oklch(0.55 0.14 ${h} / 0.4)`,
-                  color: `oklch(0.88 0.08 ${h})`,
-                  backgroundColor: `oklch(0.28 0.06 ${h} / 0.35)`,
-                }}>
-                Editar
-              </button>
-              <button onClick={handleDelete}
-                className="text-[12px] font-semibold px-4 py-2 rounded-xl text-white transition-all hover:opacity-80"
-                style={{ backgroundColor: "oklch(0.48 0.20 27)" }}>
-                Eliminar
-              </button>
-            </div>
+            {/* Actions — solo visible para el dueño o creador del perfil */}
+            {canEdit && (
+              <div className="flex gap-2 flex-shrink-0">
+                <button onClick={() => navigate(`/colleague/${id}/edit`)}
+                  className="text-[12px] font-semibold px-4 py-2 rounded-xl border transition-all"
+                  style={{
+                    borderColor: `oklch(0.55 0.14 ${h} / 0.4)`,
+                    color: `oklch(0.88 0.08 ${h})`,
+                    backgroundColor: `oklch(0.28 0.06 ${h} / 0.35)`,
+                  }}>
+                  Editar
+                </button>
+                <button onClick={handleDelete}
+                  className="text-[12px] font-semibold px-4 py-2 rounded-xl text-white transition-all hover:opacity-80"
+                  style={{ backgroundColor: "oklch(0.48 0.20 27)" }}>
+                  Eliminar
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -244,16 +288,49 @@ export default function ColleagueDetail() {
 
         {/* ── Proyectos ── */}
         <div>
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-[18px] font-bold text-foreground tracking-tight">Proyectos</h2>
-            <Button size="sm" className="text-[13px] h-8" onClick={() => navigate(`/colleague/${id}/project/new`)}>
-              + Proyecto
-            </Button>
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-[18px] font-bold text-foreground tracking-tight">
+              Proyectos
+              {companero.proyectos?.length > 0 && (
+                <span className="ml-2 text-[12px] font-normal text-muted-foreground">
+                  ({companero.proyectos.length})
+                </span>
+              )}
+            </h2>
+            {canEdit && (
+              <Button size="sm" className="text-[13px] h-8" onClick={() => navigate(`/colleague/${id}/project/new`)}>
+                + Proyecto
+              </Button>
+            )}
           </div>
 
-          {companero.proyectos?.length > 0 ? (
-            <div className="space-y-3">
-              {companero.proyectos.map((proyecto, index) => {
+          {companero.proyectos?.length > 0 && (
+            <div className="relative mb-3">
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+              </svg>
+              <input
+                type="text"
+                placeholder="Buscar proyecto…"
+                value={projectSearch}
+                onChange={e => setProjectSearch(e.target.value)}
+                className="w-full h-9 bg-card border border-border rounded-xl pl-8 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30 transition-all"
+              />
+            </div>
+          )}
+
+          {(() => {
+            const q = projectSearch.toLowerCase()
+            const filtered = (companero.proyectos || []).filter(p =>
+              !q ||
+              p.nombre?.toLowerCase().includes(q) ||
+              p.queHace?.toLowerCase().includes(q) ||
+              p.herramientas?.some(t => t.toLowerCase().includes(q)) ||
+              p.area?.toLowerCase().includes(q)
+            )
+            return filtered.length > 0 ? (
+            <div className="overflow-y-auto space-y-3 pr-0.5" style={{ maxHeight: "520px" }}>
+              {filtered.map((proyecto, index) => {
                 const pH = (h + index * 55) % 360
                 const pState = proyecto.estado ? PROJECT_STATE_STYLE[proyecto.estado] : null
                 return (
@@ -280,18 +357,20 @@ export default function ColleagueDetail() {
                             </span>
                           )}
                         </div>
-                        <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                          <button
-                            onClick={() => navigate(`/colleague/${id}/project/new`, { state: { editProject: proyecto } })}
-                            className="text-[12px] font-medium hover:opacity-70 transition-opacity"
-                            style={{ color: `oklch(0.62 0.14 ${pH})` }}>
-                            Editar
-                          </button>
-                          <button onClick={() => handleDeleteProject(proyecto)}
-                            className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
-                            Eliminar
-                          </button>
-                        </div>
+                        {canEdit && (
+                          <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                            <button
+                              onClick={() => navigate(`/colleague/${id}/project/new`, { state: { editProject: proyecto } })}
+                              className="text-[12px] font-medium hover:opacity-70 transition-opacity"
+                              style={{ color: `oklch(0.62 0.14 ${pH})` }}>
+                              Editar
+                            </button>
+                            <button onClick={() => handleDeleteProject(proyecto)}
+                              className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
+                              Eliminar
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       {/* Content */}
@@ -331,7 +410,8 @@ export default function ColleagueDetail() {
                               </div>
                             )}
                             {proyecto.fechaEntrega && (() => {
-                              const st = deadlineStatus(proyecto.fechaEntrega)
+                              const done = proyecto.estado === "Completado"
+                              const st = done ? null : deadlineStatus(proyecto.fechaEntrega)
                               return (
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <span className="text-[11px] text-muted-foreground">Entrega:</span>
@@ -381,46 +461,68 @@ export default function ColleagueDetail() {
             </div>
           ) : (
             <div className="text-center py-12 text-muted-foreground bg-card border border-border rounded-2xl">
-              <p className="text-[13px]">Sin proyectos registrados.</p>
+              <p className="text-[13px]">{projectSearch ? "Sin resultados para esa búsqueda." : "Sin proyectos registrados."}</p>
             </div>
-          )}
+          )
+        })()}
         </div>
 
         {/* ── Bitácora ── */}
         <div>
           <h2 className="text-[18px] font-bold text-foreground tracking-tight mb-4">Bitácora</h2>
 
-          <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
-            style={{ borderTopColor: `oklch(0.60 0.16 ${h})`, borderTopWidth: "3px" }}>
-            <form onSubmit={handleAddLog} className="p-5">
-              <div className="flex justify-end mb-2.5">
-                <button type="button" onClick={() => setShowEmoji(v => !v)}
-                  className="text-lg leading-none hover:scale-110 transition-transform" title="Insertar emoji">
-                  😊
-                </button>
-              </div>
-              {showEmoji && (
-                <div className="mb-3 rounded-xl overflow-hidden">
-                  <EmojiPicker onEmojiClick={handleEmojiClick} width="100%" height={330}
-                    searchPlaceholder="Buscar emoji…" skinTonesDisabled
-                    previewConfig={{ showPreview: false }} />
+          {/* Formulario: solo para el dueño del perfil */}
+          {isOwn && (
+            <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
+              style={{ borderTopColor: `oklch(0.60 0.16 ${h})`, borderTopWidth: "3px" }}>
+              <form onSubmit={handleAddLog} className="p-5">
+                <div className="flex justify-end mb-2.5">
+                  <button type="button" onClick={() => setShowEmoji(v => !v)}
+                    className="text-lg leading-none hover:scale-110 transition-transform" title="Insertar emoji">
+                    😊
+                  </button>
                 </div>
-              )}
-              <textarea ref={notaRef} value={nota} onChange={e => setNota(e.target.value)}
-                placeholder="¿Qué está haciendo esta semana?"
-                rows={3}
-                className="w-full bg-muted/50 border border-border rounded-xl px-4 py-3 text-[14px] text-foreground placeholder:text-muted-foreground mb-3 focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none transition-all" />
-              <button type="submit" disabled={saving}
-                className="text-[13px] font-semibold px-5 py-2 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-50"
-                style={{ background: `linear-gradient(135deg, oklch(0.58 0.20 ${h}), oklch(0.50 0.22 ${(h + 25) % 360}))` }}>
-                {saving ? "Guardando…" : "Guardar nota"}
-              </button>
-            </form>
-          </div>
+                {showEmoji && (
+                  <div className="mb-3 rounded-xl overflow-hidden">
+                    <EmojiPicker onEmojiClick={handleEmojiClick} width="100%" height={330}
+                      searchPlaceholder="Buscar emoji…" skinTonesDisabled
+                      previewConfig={{ showPreview: false }} />
+                  </div>
+                )}
+                <textarea ref={notaRef} value={nota} onChange={e => setNota(e.target.value)}
+                  placeholder="¿En qué estás trabajando esta semana?"
+                  rows={3}
+                  className="w-full bg-muted/50 border border-border rounded-xl px-4 py-3 text-[14px] text-foreground placeholder:text-muted-foreground mb-3 focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none transition-all" />
+                <button type="submit" disabled={saving}
+                  className="text-[13px] font-semibold px-5 py-2 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-50"
+                  style={{ background: `linear-gradient(135deg, oklch(0.58 0.20 ${h}), oklch(0.50 0.22 ${(h + 25) % 360}))` }}>
+                  {saving ? "Guardando…" : "Guardar nota"}
+                </button>
+              </form>
+            </div>
+          )}
 
-          {logs.length > 0 ? (
-            <div className="space-y-2">
-              {logs.map(log => (
+          {logs.length > 0 && (
+            <div className="relative mb-3">
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+              </svg>
+              <input
+                type="text"
+                placeholder="Buscar en bitácora…"
+                value={logSearch}
+                onChange={e => setLogSearch(e.target.value)}
+                className="w-full h-9 bg-card border border-border rounded-xl pl-8 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30 transition-all"
+              />
+            </div>
+          )}
+
+          {(() => {
+            const q = logSearch.toLowerCase()
+            const filteredLogs = logs.filter(l => !q || l.nota?.toLowerCase().includes(q))
+            return filteredLogs.length > 0 ? (
+            <div className="overflow-y-auto space-y-2 pr-0.5" style={{ maxHeight: "420px" }}>
+              {filteredLogs.map(log => (
                 <div key={log.id} className="bg-card border border-border rounded-xl p-4 group">
                   {editingLogId === log.id ? (
                     <div className="space-y-2">
@@ -451,17 +553,19 @@ export default function ColleagueDetail() {
                               ? format(log.createdAt.toDate(), "EEEE d 'de' MMMM, yyyy", { locale: es })
                               : ""}
                           </p>
-                          <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => handleStartEditLog(log)}
-                              className="text-[12px] font-medium hover:opacity-70 transition-opacity"
-                              style={{ color: `oklch(0.62 0.14 ${h})` }}>
-                              Editar
-                            </button>
-                            <button onClick={() => handleDeleteLog(log.id)}
-                              className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
-                              Eliminar
-                            </button>
-                          </div>
+                          {log.creadoPor === user?.uid && (
+                            <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => handleStartEditLog(log)}
+                                className="text-[12px] font-medium hover:opacity-70 transition-opacity"
+                                style={{ color: `oklch(0.62 0.14 ${h})` }}>
+                                Editar
+                              </button>
+                              <button onClick={() => handleDeleteLog(log.id)}
+                                className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
+                                Eliminar
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -471,10 +575,114 @@ export default function ColleagueDetail() {
             </div>
           ) : (
             <div className="text-center py-12 text-muted-foreground bg-card border border-border rounded-2xl">
-              <p className="text-[13px]">Sin notas aún. Agrega la primera.</p>
+              <p className="text-[13px]">{logSearch ? "Sin resultados para esa búsqueda." : "Sin notas aún. Agrega la primera."}</p>
             </div>
-          )}
+          )
+        })()}
         </div>
+
+        {/* ── Retroalimentación — solo admin y dueño del perfil ── */}
+        {(isOwn || isAdmin) && (
+          <div>
+            <div className="flex items-center gap-2.5 mb-4">
+              <h2 className="text-[18px] font-bold text-foreground tracking-tight">Retroalimentación</h2>
+              <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full"
+                style={{ backgroundColor: "oklch(0.70 0.18 55 / 0.12)", color: "oklch(0.58 0.16 50)" }}>
+                🔒 Privado
+              </span>
+            </div>
+
+            {/* Formulario — solo admins */}
+            {isAdmin && (
+              <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
+                style={{ borderTopColor: "oklch(0.68 0.18 55)", borderTopWidth: "3px" }}>
+                <form onSubmit={handleAddFeedback} className="p-5">
+                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-3">
+                    Escribe retroalimentación para {companero.nombre}
+                  </p>
+                  {editingFbId ? (
+                    <div className="space-y-2">
+                      <textarea value={editingFbText} onChange={e => setEditingFbText(e.target.value)}
+                        rows={3}
+                        className="w-full bg-muted/50 border border-border rounded-xl px-4 py-3 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none transition-all" />
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => handleSaveEditFeedback(editingFbId)}
+                          className="text-[13px] font-semibold px-5 py-2 rounded-xl text-white transition-all hover:opacity-90"
+                          style={{ background: "linear-gradient(135deg, oklch(0.62 0.18 55), oklch(0.55 0.20 40))" }}>
+                          Guardar cambios
+                        </button>
+                        <button type="button" onClick={() => setEditingFbId(null)}
+                          className="text-[13px] font-medium px-4 py-2 rounded-xl border border-border text-muted-foreground hover:text-foreground transition-colors">
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <textarea value={feedbackText} onChange={e => setFeedbackText(e.target.value)}
+                        placeholder="Ej: Buen avance esta semana, recuerda documentar los cambios…"
+                        rows={3}
+                        className="w-full bg-muted/50 border border-border rounded-xl px-4 py-3 text-[14px] text-foreground placeholder:text-muted-foreground mb-3 focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none transition-all" />
+                      <button type="submit" disabled={savingFeedback}
+                        className="text-[13px] font-semibold px-5 py-2 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-50"
+                        style={{ background: "linear-gradient(135deg, oklch(0.62 0.18 55), oklch(0.55 0.20 40))" }}>
+                        {savingFeedback ? "Enviando…" : "Enviar retroalimentación"}
+                      </button>
+                    </>
+                  )}
+                </form>
+              </div>
+            )}
+
+            {/* Lista de retroalimentaciones */}
+            {feedback.length > 0 ? (
+              <div className="space-y-2">
+                {feedback.map(fb => (
+                  <div key={fb.id} className="bg-card border border-border rounded-xl p-4 group"
+                    style={{ borderLeftColor: "oklch(0.68 0.18 55)", borderLeftWidth: "3px" }}>
+                    <p className="text-[14px] text-foreground leading-relaxed">{fb.texto}</p>
+                    <div className="flex justify-between items-center mt-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-semibold"
+                          style={{ color: "oklch(0.58 0.14 50)" }}>
+                          {fb.creadoPorNombre || fb.creadoPorEmail}
+                        </span>
+                        {fb.createdAt?.toDate && (
+                          <>
+                            <span className="text-[11px] text-muted-foreground">·</span>
+                            <span className="text-[11px] text-muted-foreground">
+                              {format(fb.createdAt.toDate(), "d 'de' MMMM, yyyy", { locale: es })}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      {isAdmin && (
+                        <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => { setEditingFbId(fb.id); setEditingFbText(fb.texto) }}
+                            className="text-[12px] font-medium hover:opacity-70 transition-opacity"
+                            style={{ color: "oklch(0.60 0.14 55)" }}>
+                            Editar
+                          </button>
+                          <button onClick={() => handleDeleteFeedback(fb.id)}
+                            className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
+                            Eliminar
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-10 text-muted-foreground bg-card border border-border rounded-2xl">
+                <p className="text-[13px]">
+                  {isAdmin ? "Aún no hay retroalimentación para esta persona." : "Aún no tienes retroalimentación."}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
       </main>
       <Footer />

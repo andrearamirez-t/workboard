@@ -19,8 +19,9 @@ export default function ColleagueForm() {
   const { id } = useParams()
   const isEdit = Boolean(id)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
   const [showEmoji, setShowEmoji] = useState(false)
-  const [form, setForm] = useState({ nombre: "", area: "", rol: "", herramientas: "", trabajaEn: "", notas: "" })
+  const [form, setForm] = useState({ nombre: "", email: "", area: "", rol: "", herramientas: "", trabajaEn: "", notas: "" })
   const notasRef = useRef(null)
 
   useEffect(() => {
@@ -30,6 +31,7 @@ export default function ColleagueForm() {
         const d = snap.data()
         setForm({
           nombre: d.nombre || "",
+          email: d.email || "",
           area: d.area || "",
           rol: d.rol || "",
           herramientas: (d.herramientas || []).join(", "),
@@ -60,20 +62,28 @@ export default function ColleagueForm() {
     e.preventDefault()
     if (!form.nombre.trim()) return
     setSaving(true)
+    setSaveError(null)
     const data = {
       nombre: form.nombre.trim(),
+      email: form.email.trim().toLowerCase(),
       area: form.area.trim(),
       rol: form.rol.trim(),
       herramientas: form.herramientas.split(",").map(h => h.trim()).filter(Boolean),
       trabajaEn: form.trabajaEn.trim(),
       notas: form.notas.trim(),
     }
-    if (isEdit) {
-      await updateDoc(doc(db, "companeros", id), { ...data, updatedAt: serverTimestamp() })
-      navigate(`/colleague/${id}`)
-    } else {
-      await addDoc(collection(db, "companeros"), { ...data, proyectos: [], creadoPor: user.uid, createdAt: serverTimestamp() })
-      navigate("/dashboard")
+    try {
+      if (isEdit) {
+        await updateDoc(doc(db, "companeros", id), { ...data, updatedAt: serverTimestamp() })
+        navigate(`/colleague/${id}`)
+      } else {
+        await addDoc(collection(db, "companeros"), { ...data, proyectos: [], creadoPor: user.uid, createdAt: serverTimestamp() })
+        navigate("/dashboard")
+      }
+    } catch (err) {
+      console.error("[Workboard] Error guardando perfil:", err.code, err.message)
+      setSaveError("Sin permiso para guardar. Cierra sesión, vuelve a entrar y reintenta.")
+      setSaving(false)
     }
   }
 
@@ -115,6 +125,12 @@ export default function ColleagueForm() {
               <label className="block text-[13px] font-medium text-foreground mb-1.5">Nombre *</label>
               <input name="nombre" value={form.nombre} onChange={handleChange}
                 placeholder="Ej: Carlos Pérez" className={inputClass} />
+            </div>
+            <div>
+              <label className="block text-[13px] font-medium text-foreground mb-1.5">Correo institucional <span className="text-muted-foreground font-normal">(cuenta Google @cun.edu.co)</span></label>
+              <input name="email" type="email" value={form.email} onChange={handleChange}
+                placeholder="Ej: carlos_perez@cun.edu.co" className={inputClass} />
+              <p className="text-[11px] text-muted-foreground mt-1.5">Necesario para que la persona pueda editar su propio perfil.</p>
             </div>
             <div>
               <label className="block text-[13px] font-medium text-foreground mb-1.5">Rol</label>
@@ -167,6 +183,11 @@ export default function ColleagueForm() {
           </div>
 
           {/* ── Actions ── */}
+          {saveError && (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/8 px-4 py-2.5">
+              <p className="text-[12px] text-destructive">{saveError}</p>
+            </div>
+          )}
           <div className="flex gap-3 pt-1">
             <Button type="submit" disabled={saving}>
               {saving ? "Guardando…" : isEdit ? "Actualizar" : "Guardar compañero"}

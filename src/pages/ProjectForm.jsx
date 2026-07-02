@@ -22,6 +22,7 @@ export default function ProjectForm() {
   const isEdit = Boolean(editData)
 
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
   const [form, setForm] = useState({
     nombre: editData?.nombre || "",
     estado: editData?.estado || "",
@@ -48,6 +49,7 @@ export default function ProjectForm() {
     e.preventDefault()
     if (!form.nombre.trim()) return
     setSaving(true)
+    setSaveError(null)
     const proyecto = {
       nombre: form.nombre.trim(),
       estado: form.estado,
@@ -59,12 +61,18 @@ export default function ProjectForm() {
       fechaEntrega: form.fechaEntrega,
       versiones: form.versiones.filter(v => v.nombre.trim()),
     }
-    if (isEdit) {
-      await updateProject(id, editData, proyecto)
-    } else {
-      await updateDoc(doc(db, "companeros", id), { proyectos: arrayUnion(proyecto) })
+    try {
+      if (isEdit) {
+        await updateProject(id, editData, proyecto)
+      } else {
+        await updateDoc(doc(db, "companeros", id), { proyectos: arrayUnion(proyecto) })
+      }
+      navigate(`/colleague/${id}`)
+    } catch (err) {
+      console.error("[Workboard] Error guardando proyecto:", err.code, err.message)
+      setSaveError("No se pudo guardar. Verifica los permisos o intenta de nuevo.")
+      setSaving(false)
     }
-    navigate(`/colleague/${id}`)
   }
 
   const inputClass = "w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30 transition-all"
@@ -204,6 +212,11 @@ export default function ProjectForm() {
           </div>
 
           {/* ── Actions ── */}
+          {saveError && (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/8 px-4 py-2.5">
+              <p className="text-[12px] text-destructive">{saveError}</p>
+            </div>
+          )}
           <div className="flex gap-3 pt-1">
             <Button type="submit" disabled={saving}>
               {saving ? "Guardando…" : isEdit ? "Actualizar proyecto" : "Guardar proyecto"}
