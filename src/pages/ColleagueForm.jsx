@@ -21,7 +21,7 @@ export default function ColleagueForm() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
   const [showEmoji, setShowEmoji] = useState(false)
-  const [form, setForm] = useState({ nombre: "", email: "", area: "", rol: "", herramientas: "", trabajaEn: "", notas: "" })
+  const [form, setForm] = useState({ nombre: "", email: "", whatsapp: "", area: "", rol: "", herramientas: "", trabajaEn: "", notas: "" })
   const notasRef = useRef(null)
 
   useEffect(() => {
@@ -32,6 +32,7 @@ export default function ColleagueForm() {
         setForm({
           nombre: d.nombre || "",
           email: d.email || "",
+          whatsapp: d.whatsapp || "",
           area: d.area || "",
           rol: d.rol || "",
           herramientas: (d.herramientas || []).join(", "),
@@ -66,6 +67,7 @@ export default function ColleagueForm() {
     const data = {
       nombre: form.nombre.trim(),
       email: form.email.trim().toLowerCase(),
+      whatsapp: form.whatsapp.trim().replace(/\D/g, ""),
       area: form.area.trim(),
       rol: form.rol.trim(),
       herramientas: form.herramientas.split(",").map(h => h.trim()).filter(Boolean),
@@ -131,6 +133,12 @@ export default function ColleagueForm() {
               <input name="email" type="email" value={form.email} onChange={handleChange}
                 placeholder="Ej: carlos_perez@cun.edu.co" className={inputClass} />
               <p className="text-[11px] text-muted-foreground mt-1.5">Necesario para que la persona pueda editar su propio perfil.</p>
+            </div>
+            <div>
+              <label className="block text-[13px] font-medium text-foreground mb-1.5">WhatsApp <span className="text-muted-foreground font-normal">(con código de país, sin +)</span></label>
+              <input name="whatsapp" type="tel" value={form.whatsapp} onChange={handleChange}
+                placeholder="Ej: 573221234567" className={inputClass} />
+              <p className="text-[11px] text-muted-foreground mt-1.5">Permite recibir notificaciones y registrar bitácora desde WhatsApp.</p>
             </div>
             <div>
               <label className="block text-[13px] font-medium text-foreground mb-1.5">Rol</label>

@@ -26,6 +26,7 @@ export default function ProjectForm() {
   const [form, setForm] = useState({
     nombre: editData?.nombre || "",
     estado: editData?.estado || "",
+    avance: editData?.avance ?? 0,
     area: editData?.area || "",
     queHace: editData?.queHace || "",
     herramientas: (editData?.herramientas || []).join(", "),
@@ -53,6 +54,7 @@ export default function ProjectForm() {
     const proyecto = {
       nombre: form.nombre.trim(),
       estado: form.estado,
+      avance: Number(form.avance),
       area: form.area.trim(),
       queHace: form.queHace.trim(),
       herramientas: form.herramientas.split(",").map(h => h.trim()).filter(Boolean),
@@ -122,6 +124,23 @@ export default function ProjectForm() {
                   <option value="">Sin estado</option>
                   {PROJECT_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[13px] font-medium text-foreground">Avance del proyecto</label>
+                <span className="text-[13px] font-bold tabular-nums"
+                  style={{ color: form.avance >= 75 ? "oklch(0.60 0.18 145)" : form.avance >= 50 ? "oklch(0.60 0.18 260)" : form.avance >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)" }}>
+                  {form.avance}%
+                </span>
+              </div>
+              <input type="range" name="avance" min="0" max="100" step="5"
+                value={form.avance} onChange={handleChange}
+                className="w-full h-2 rounded-full appearance-none cursor-pointer"
+                style={{ accentColor: form.avance >= 75 ? "oklch(0.60 0.18 145)" : form.avance >= 50 ? "oklch(0.60 0.18 260)" : form.avance >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)" }} />
+              <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
               </div>
             </div>
 

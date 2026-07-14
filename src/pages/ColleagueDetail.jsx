@@ -5,6 +5,7 @@ import { db } from "@/services/firebase"
 import { deleteColleague, deleteProject } from "@/services/colleagues.service"
 import { addLog, getLogs, deleteLog, updateLog } from "@/services/logs.service"
 import { addFeedback, getFeedback, deleteFeedback, updateFeedback } from "@/services/feedback.service"
+import { addTask, getTasks, updateTaskStatus, deleteTask } from "@/services/tasks.service"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
@@ -79,6 +80,11 @@ export default function ColleagueDetail() {
   const [editingFbId, setEditingFbId] = useState(null)
   const [editingFbText, setEditingFbText] = useState("")
 
+  const [tasks, setTasks] = useState([])
+  const [taskForm, setTaskForm] = useState({ titulo: "", descripcion: "", fechaLimite: "" })
+  const [savingTask, setSavingTask] = useState(false)
+  const [showTaskForm, setShowTaskForm] = useState(false)
+
   const loadData = async () => {
     const snap = await getDoc(doc(db, "companeros", id))
     if (snap.exists()) setCompanero({ id: snap.id, ...snap.data() })
@@ -90,6 +96,44 @@ export default function ColleagueDetail() {
   useEffect(() => {
     if (isOwn || isAdmin) getFeedback(id).then(setFeedback)
   }, [id, isOwn, isAdmin])
+
+  useEffect(() => {
+    if (isOwn || isAdmin) getTasks(id).then(setTasks)
+  }, [id, isOwn, isAdmin])
+
+  const handleAddTask = async (e) => {
+    e.preventDefault()
+    if (!taskForm.titulo.trim()) return
+    setSavingTask(true)
+    try {
+      await addTask(id, taskForm, user)
+      setTaskForm({ titulo: "", descripcion: "", fechaLimite: "" })
+      setShowTaskForm(false)
+      setTasks(await getTasks(id))
+    } catch (err) {
+      console.error("[Workboard] Error creando tarea:", err.code, err.message)
+    }
+    setSavingTask(false)
+  }
+
+  const handleUpdateTaskStatus = async (taskId, nuevoEstado) => {
+    try {
+      await updateTaskStatus(id, taskId, nuevoEstado)
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, estado: nuevoEstado } : t))
+    } catch (err) {
+      console.error("[Workboard] Error actualizando tarea:", err.code, err.message)
+    }
+  }
+
+  const handleDeleteTask = async (taskId) => {
+    if (!confirm("¿Eliminar esta tarea?")) return
+    try {
+      await deleteTask(id, taskId)
+      setTasks(await getTasks(id))
+    } catch (err) {
+      console.error("[Workboard] Error eliminando tarea:", err.code, err.message)
+    }
+  }
 
   const handleDelete = async () => {
     if (!confirm(`¿Eliminar a ${companero.nombre}? No se puede deshacer.`)) return
@@ -157,8 +201,12 @@ export default function ColleagueDetail() {
 
   const handleDeleteFeedback = async (fbId) => {
     if (!confirm("¿Eliminar esta retroalimentación?")) return
-    await deleteFeedback(id, fbId)
-    setFeedback(prev => prev.filter(f => f.id !== fbId))
+    try {
+      await deleteFeedback(id, fbId)
+      setFeedback(await getFeedback(id))
+    } catch (err) {
+      console.error("[Workboard] Error eliminando retroalimentación:", err.code, err.message)
+    }
   }
 
   const handleSaveEditFeedback = async (fbId) => {
@@ -373,6 +421,32 @@ export default function ColleagueDetail() {
                         )}
                       </div>
 
+                      {/* Avance — solo admin y dueño */}
+                      {(isOwn || isAdmin) && (
+                        <div className="mb-2.5">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">Avance</span>
+                            <span className="text-[12px] font-bold tabular-nums"
+                              style={{ color: (proyecto.avance ?? 0) >= 75 ? "oklch(0.60 0.18 145)" : (proyecto.avance ?? 0) >= 50 ? "oklch(0.60 0.18 260)" : (proyecto.avance ?? 0) >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)" }}>
+                              {proyecto.avance ?? 0}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "oklch(0.40 0.02 260 / 0.3)" }}>
+                            <div className="h-full rounded-full transition-all duration-700"
+                              style={{
+                                width: `${proyecto.avance ?? 0}%`,
+                                background: (proyecto.avance ?? 0) >= 75
+                                  ? "linear-gradient(90deg, oklch(0.55 0.18 145), oklch(0.62 0.20 155))"
+                                  : (proyecto.avance ?? 0) >= 50
+                                    ? "linear-gradient(90deg, oklch(0.55 0.18 260), oklch(0.62 0.20 280))"
+                                    : (proyecto.avance ?? 0) >= 25
+                                      ? "linear-gradient(90deg, oklch(0.60 0.18 55), oklch(0.68 0.20 65))"
+                                      : "linear-gradient(90deg, oklch(0.60 0.22 27), oklch(0.65 0.22 35))",
+                              }} />
+                          </div>
+                        </div>
+                      )}
+
                       {/* Content */}
                       {proyecto.queHace && (
                         <p className="text-[13px] text-muted-foreground mb-2.5 leading-relaxed">
@@ -553,7 +627,7 @@ export default function ColleagueDetail() {
                               ? format(log.createdAt.toDate(), "EEEE d 'de' MMMM, yyyy", { locale: es })
                               : ""}
                           </p>
-                          {log.creadoPor === user?.uid && (
+                          {(isOwn || log.creadoPor === user?.uid || isAdmin) && (
                             <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button onClick={() => handleStartEditLog(log)}
                                 className="text-[12px] font-medium hover:opacity-70 transition-opacity"
@@ -636,48 +710,196 @@ export default function ColleagueDetail() {
 
             {/* Lista de retroalimentaciones */}
             {feedback.length > 0 ? (
-              <div className="space-y-2">
-                {feedback.map(fb => (
-                  <div key={fb.id} className="bg-card border border-border rounded-xl p-4 group"
-                    style={{ borderLeftColor: "oklch(0.68 0.18 55)", borderLeftWidth: "3px" }}>
-                    <p className="text-[14px] text-foreground leading-relaxed">{fb.texto}</p>
-                    <div className="flex justify-between items-center mt-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[11px] font-semibold"
-                          style={{ color: "oklch(0.58 0.14 50)" }}>
-                          {fb.creadoPorNombre || fb.creadoPorEmail}
-                        </span>
-                        {fb.createdAt?.toDate && (
-                          <>
-                            <span className="text-[11px] text-muted-foreground">·</span>
+              <div className="overflow-y-auto space-y-3 pr-0.5" style={{ maxHeight: "460px" }}>
+                {feedback.map(fb => {
+                  const authorName = fb.creadoPorNombre || fb.creadoPorEmail || "Admin"
+                  const authorInitial = authorName.charAt(0).toUpperCase()
+                  return (
+                    <div key={fb.id} className="rounded-xl overflow-hidden border group"
+                      style={{
+                        borderColor: "oklch(0.68 0.18 55 / 0.35)",
+                        backgroundColor: "oklch(0.65 0.14 55 / 0.07)",
+                      }}>
+
+                      {/* Cabecera con autor — visualmente distinta de la bitácora */}
+                      <div className="flex items-center justify-between px-4 py-2.5 border-b"
+                        style={{ borderColor: "oklch(0.68 0.18 55 / 0.20)", backgroundColor: "oklch(0.65 0.16 55 / 0.10)" }}>
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
+                            style={{ background: "linear-gradient(135deg, oklch(0.65 0.20 50), oklch(0.55 0.22 38))" }}>
+                            {authorInitial}
+                          </div>
+                          <span className="text-[13px] font-semibold" style={{ color: "oklch(0.68 0.18 50)" }}>
+                            {authorName}
+                          </span>
+                          {fb.createdAt?.toDate && (
                             <span className="text-[11px] text-muted-foreground">
-                              {format(fb.createdAt.toDate(), "d 'de' MMMM, yyyy", { locale: es })}
+                              · {format(fb.createdAt.toDate(), "d 'de' MMMM, yyyy", { locale: es })}
                             </span>
-                          </>
+                          )}
+                        </div>
+                        {isAdmin && (
+                          <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => { setEditingFbId(fb.id); setEditingFbText(fb.texto) }}
+                              className="text-[12px] font-medium hover:opacity-70 transition-opacity"
+                              style={{ color: "oklch(0.60 0.14 55)" }}>
+                              Editar
+                            </button>
+                            <button onClick={() => handleDeleteFeedback(fb.id)}
+                              className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
+                              Eliminar
+                            </button>
+                          </div>
                         )}
                       </div>
-                      {isAdmin && (
-                        <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => { setEditingFbId(fb.id); setEditingFbText(fb.texto) }}
-                            className="text-[12px] font-medium hover:opacity-70 transition-opacity"
-                            style={{ color: "oklch(0.60 0.14 55)" }}>
-                            Editar
-                          </button>
-                          <button onClick={() => handleDeleteFeedback(fb.id)}
-                            className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
-                            Eliminar
-                          </button>
-                        </div>
-                      )}
+
+                      {/* Contenido */}
+                      <div className="px-4 py-3">
+                        <p className="text-[14px] text-foreground leading-relaxed">{fb.texto}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
               <div className="text-center py-10 text-muted-foreground bg-card border border-border rounded-2xl">
                 <p className="text-[13px]">
                   {isAdmin ? "Aún no hay retroalimentación para esta persona." : "Aún no tienes retroalimentación."}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Tareas — solo admin y dueño del perfil ── */}
+        {(isOwn || isAdmin) && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-[18px] font-bold text-foreground tracking-tight">Tareas</h2>
+                {tasks.length > 0 && (
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full"
+                    style={{ backgroundColor: "oklch(0.60 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>
+                    {tasks.filter(t => t.estado !== "Hecha").length} pendientes
+                  </span>
+                )}
+              </div>
+              {isAdmin && (
+                <button onClick={() => setShowTaskForm(v => !v)}
+                  className="text-[12px] font-semibold h-8 px-3 rounded-xl border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all">
+                  {showTaskForm ? "Cancelar" : "+ Tarea"}
+                </button>
+              )}
+            </div>
+
+            {/* Formulario nueva tarea — solo admins */}
+            {isAdmin && showTaskForm && (
+              <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
+                style={{ borderTopColor: "oklch(0.60 0.18 260)", borderTopWidth: "3px" }}>
+                <form onSubmit={handleAddTask} className="p-5 space-y-3">
+                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">
+                    Nueva tarea para {companero.nombre}
+                  </p>
+                  <input
+                    value={taskForm.titulo} onChange={e => setTaskForm(f => ({ ...f, titulo: e.target.value }))}
+                    placeholder="Título de la tarea *"
+                    className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 transition-all" />
+                  <textarea
+                    value={taskForm.descripcion} onChange={e => setTaskForm(f => ({ ...f, descripcion: e.target.value }))}
+                    placeholder="Descripción o instrucciones (opcional)"
+                    rows={2}
+                    className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none transition-all" />
+                  <div className="flex gap-3 items-end">
+                    <div className="flex-1">
+                      <label className="block text-[12px] font-medium text-muted-foreground mb-1">Fecha límite</label>
+                      <input type="date" value={taskForm.fechaLimite} onChange={e => setTaskForm(f => ({ ...f, fechaLimite: e.target.value }))}
+                        className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 transition-all" />
+                    </div>
+                    <button type="submit" disabled={savingTask}
+                      className="h-10 px-5 rounded-xl text-[13px] font-bold text-white transition-all hover:opacity-90 disabled:opacity-50"
+                      style={{ background: "linear-gradient(135deg, oklch(0.58 0.20 260), oklch(0.50 0.22 280))" }}>
+                      {savingTask ? "Guardando…" : "Guardar tarea"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Lista de tareas */}
+            {tasks.length > 0 ? (
+              <div className="space-y-2">
+                {tasks.map(task => {
+                  const vencida = task.fechaLimite && task.estado !== "Hecha" && new Date(task.fechaLimite) < new Date()
+                  const estadoColors = {
+                    "Pendiente": { color: "oklch(0.65 0.22 27)", bg: "oklch(0.65 0.22 27 / 0.10)" },
+                    "En proceso": { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.10)" },
+                    "Hecha":      { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.10)" },
+                  }
+                  const st = estadoColors[task.estado] || estadoColors["Pendiente"]
+                  return (
+                    <div key={task.id} className="bg-card border border-border rounded-xl p-4 group flex gap-3 items-start">
+                      {/* Checkbox de estado */}
+                      <button
+                        onClick={() => handleUpdateTaskStatus(task.id,
+                          task.estado === "Pendiente" ? "En proceso" : task.estado === "En proceso" ? "Hecha" : "Pendiente")}
+                        className="w-5 h-5 rounded-md border-2 flex-shrink-0 mt-0.5 transition-all hover:scale-110"
+                        style={{
+                          borderColor: st.color,
+                          backgroundColor: task.estado === "Hecha" ? st.color : "transparent",
+                        }}
+                        title="Cambiar estado">
+                        {task.estado === "Hecha" && (
+                          <svg viewBox="0 0 12 12" fill="none" className="w-full h-full p-0.5">
+                            <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        )}
+                        {task.estado === "En proceso" && (
+                          <div className="w-full h-full rounded-sm m-0.5" style={{ backgroundColor: st.color, margin: "2px" }} />
+                        )}
+                      </button>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className={`text-[14px] font-semibold leading-snug ${task.estado === "Hecha" ? "line-through text-muted-foreground" : "text-foreground"}`}>
+                            {task.titulo}
+                          </p>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                              style={{ color: st.color, backgroundColor: st.bg }}>
+                              {task.estado}
+                            </span>
+                            {isAdmin && (
+                              <button onClick={() => handleDeleteTask(task.id)}
+                                className="text-[11px] text-destructive opacity-0 group-hover:opacity-100 transition-opacity hover:opacity-70">
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {task.descripcion && (
+                          <p className="text-[12.5px] text-muted-foreground mt-1 leading-relaxed">{task.descripcion}</p>
+                        )}
+                        <div className="flex items-center gap-3 mt-1.5">
+                          {task.fechaLimite && (
+                            <span className={`text-[11px] font-medium ${vencida ? "text-destructive" : "text-muted-foreground"}`}>
+                              {vencida ? "⚠ Vencida · " : "Límite: "}
+                              {format(new Date(task.fechaLimite + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                            </span>
+                          )}
+                          <span className="text-[11px] text-muted-foreground/60">
+                            De: {task.creadoPorNombre}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-10 text-muted-foreground bg-card border border-border rounded-2xl">
+                <p className="text-[13px]">
+                  {isAdmin ? "Sin tareas asignadas aún." : "No tienes tareas pendientes."}
                 </p>
               </div>
             )}

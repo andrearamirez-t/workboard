@@ -27,12 +27,17 @@ export const deleteProject = async (colleagueId, proyecto) => {
   })
 }
 
+const sameProject = (a, b) =>
+  a.nombre === b.nombre && (a.fechaInicio || "") === (b.fechaInicio || "")
+
 export const updateProject = async (colleagueId, oldProject, newProject) => {
   const docRef = doc(db, "companeros", colleagueId)
   const snap = await getDoc(docRef)
   const proyectos = snap.data().proyectos || []
-  const updated = proyectos.map(p =>
-    JSON.stringify(p) === JSON.stringify(oldProject) ? newProject : p
-  )
+  let replaced = false
+  const updated = proyectos.map(p => {
+    if (!replaced && sameProject(p, oldProject)) { replaced = true; return newProject }
+    return p
+  })
   return await updateDoc(docRef, { proyectos: updated })
 }

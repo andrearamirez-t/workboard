@@ -1,0 +1,17 @@
+{
+  "name": "workboard-functions",
+  "description": "Workboard API – Firebase Cloud Functions",
+  "scripts": {
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "22"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^11.11.0",
+    "firebase-functions": "^4.6.0"
+  },
+  "private": true
+}

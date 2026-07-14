@@ -9,6 +9,7 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
 import { UserCircle, Search } from "lucide-react"
 import { NotificationBell } from "@/components/ui/NotificationBell"
+import { Tutorial, resetTutorial } from "@/components/ui/Tutorial"
 
 const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
@@ -27,6 +28,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState("")
   const [hoveredId, setHoveredId] = useState(null)
   const [exporting, setExporting] = useState(null)
+  const [showTutorial, setShowTutorial] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -73,13 +75,21 @@ export default function Dashboard() {
           <span className="text-[15px] font-semibold tracking-tight text-foreground">Workboard</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <NotificationBell isAdmin={isAdmin} myColleagueId={myColleagueId} userEmail={user?.email} />
+          <span data-tour="bell">
+            <NotificationBell isAdmin={isAdmin} myColleagueId={myColleagueId} userEmail={user?.email} />
+          </span>
           <ThemeToggle />
           <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold select-none cursor-default"
             style={{ background: "linear-gradient(135deg, oklch(0.62 0.22 295), oklch(0.50 0.24 316))", boxShadow: "0 2px 6px oklch(0.52 0.22 295 / 30%)" }}
             title={user?.displayName || user?.email}>
             {userInitial}
           </div>
+          <button
+            onClick={() => { resetTutorial(user?.email); setShowTutorial(true) }}
+            className="w-7 h-7 flex items-center justify-center rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors text-[12px] font-bold"
+            title="Ver tutorial">
+            ?
+          </button>
           <Button variant="outline" size="sm" onClick={logout} className="text-[13px] h-8">
             Salir
           </Button>
@@ -154,7 +164,7 @@ export default function Dashboard() {
 
         {/* ── Search ── */}
         {!loadingData && colleagues.length > 0 && (
-          <div className="relative mb-4">
+          <div className="relative mb-4" data-tour="search">
             <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <input
               type="text"
@@ -217,7 +227,7 @@ export default function Dashboard() {
         ) : (
 
           /* ── Cards grid ── */
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-tour="cards">
             {filtered.map((c) => {
               const h = hashHue(c.id)
               const isHovered = hoveredId === c.id
@@ -331,6 +341,11 @@ export default function Dashboard() {
       </main>
 
       <Footer />
+      <Tutorial
+        userEmail={user?.email}
+        forceOpen={showTutorial}
+        onClose={() => setShowTutorial(false)}
+      />
     </div>
   )
 }
