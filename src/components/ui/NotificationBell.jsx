@@ -2,8 +2,8 @@ import { useState, useEffect, useRef } from "react"
 import { Bell } from "lucide-react"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
-import { getAllLogs } from "@/services/logs.service"
-import { getFeedback } from "@/services/feedback.service"
+import { collection, query, orderBy, onSnapshot } from "firebase/firestore"
+import { db } from "@/services/firebase"
 
 const storageKey = (type, id) => `wb_read_${type}_${id}`
 
@@ -19,49 +19,52 @@ const saveReadIds = (key, set) => {
 export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
   const [items, setItems] = useState([])
   const [open, setOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
   const ref = useRef(null)
 
   const key = isAdmin
     ? storageKey("logs", userEmail)
     : storageKey("fb", myColleagueId)
 
-  const load = async () => {
-    setLoading(true)
-    try {
-      const readIds = getReadIds(key)
-      if (isAdmin) {
-        const logs = await getAllLogs()
-        const fresh = logs
-          .filter(l => !readIds.has(l.id))
-          .map(l => ({
-            id: l.id,
-            text: `${l.colleagueName || "Alguien"} agregó una nota`,
-            sub: l.nota?.slice(0, 70) + (l.nota?.length > 70 ? "…" : ""),
-            date: l.createdAt?.toDate?.(),
-            href: `/colleague/${l.colleagueId}`,
-          }))
-        setItems(fresh)
-      } else if (myColleagueId) {
-        const fb = await getFeedback(myColleagueId)
-        const fresh = fb
-          .filter(f => !readIds.has(f.id))
-          .map(f => ({
-            id: f.id,
-            text: `${f.creadoPorNombre || "Admin"} te dejó retroalimentación`,
-            sub: f.texto?.slice(0, 70) + (f.texto?.length > 70 ? "…" : ""),
-            date: f.createdAt?.toDate?.(),
-            href: `/colleague/${myColleagueId}`,
-          }))
-        setItems(fresh)
-      }
-    } catch { /* sin permiso */ }
-    setLoading(false)
-  }
-
+  // ── Listener en tiempo real ─────────────────────────────────────────────
   useEffect(() => {
-    if (isAdmin || myColleagueId) load()
-  }, [isAdmin, myColleagueId])
+    if (!isAdmin && !myColleagueId) return
+
+    let q
+    if (isAdmin) {
+      q = query(collection(db, "logs"), orderBy("createdAt", "desc"))
+    } else {
+      q = query(
+        collection(db, "companeros", myColleagueId, "retroalimentacion"),
+        orderBy("createdAt", "desc")
+      )
+    }
+
+    const unsub = onSnapshot(q, (snap) => {
+      const readIds = getReadIds(key)
+      const fresh = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(doc => !readIds.has(doc.id))
+        .map(doc => isAdmin
+          ? {
+              id: doc.id,
+              text: `${doc.colleagueName || "Alguien"} agregó una nota`,
+              sub: doc.nota?.slice(0, 70) + (doc.nota?.length > 70 ? "…" : ""),
+              date: doc.createdAt?.toDate?.(),
+              href: `/colleague/${doc.colleagueId}`,
+            }
+          : {
+              id: doc.id,
+              text: `${doc.creadoPorNombre || "Admin"} te dejó retroalimentación`,
+              sub: doc.texto?.slice(0, 70) + (doc.texto?.length > 70 ? "…" : ""),
+              date: doc.createdAt?.toDate?.(),
+              href: `/colleague/${myColleagueId}`,
+            }
+        )
+      setItems(fresh)
+    }, () => { /* sin permiso — ignora */ })
+
+    return () => unsub()
+  }, [isAdmin, myColleagueId, key])
 
   const markOne = (id) => {
     const readIds = getReadIds(key)
@@ -77,7 +80,6 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
     setItems([])
   }
 
-  // Cierra sin marcar como leído
   useEffect(() => {
     const handler = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false)
@@ -121,11 +123,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
           </div>
 
           <div className="max-h-72 overflow-y-auto">
-            {loading ? (
-              <div className="py-8 flex justify-center">
-                <div className="w-4 h-4 rounded-full border-2 border-muted border-t-primary animate-spin" />
-              </div>
-            ) : count === 0 ? (
+            {count === 0 ? (
               <div className="py-8 text-center">
                 <Bell size={20} className="text-muted-foreground mx-auto mb-2 opacity-40" />
                 <p className="text-[13px] text-muted-foreground">Sin notificaciones nuevas</p>

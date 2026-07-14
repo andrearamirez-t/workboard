@@ -3,13 +3,14 @@ import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { getColleagues } from "@/services/colleagues.service"
 import { getAllLogs } from "@/services/logs.service"
-import { exportPDF, exportExcel } from "@/utils/exportReport"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
-import { UserCircle, Search } from "lucide-react"
+import { UserCircle, Search, Users, BarChart2, Plus, Pencil, Trash2, X } from "lucide-react"
 import { NotificationBell } from "@/components/ui/NotificationBell"
 import { Tutorial, resetTutorial } from "@/components/ui/Tutorial"
+import { MetricsDashboard } from "@/components/ui/MetricsDashboard"
+import { getEquipos, createEquipo, updateEquipo, deleteEquipo } from "@/services/equipos.service"
 
 const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
@@ -27,25 +28,65 @@ export default function Dashboard() {
   const [loadingData, setLoadingData] = useState(true)
   const [search, setSearch] = useState("")
   const [hoveredId, setHoveredId] = useState(null)
-  const [exporting, setExporting] = useState(null)
   const [showTutorial, setShowTutorial] = useState(false)
+  const [tab, setTab] = useState("equipo") // "equipo" | "equipos" | "metricas"
+  const [logs, setLogs] = useState([])
+  // Equipos state
+  const [equipos, setEquipos] = useState([])
+  const [equipoForm, setEquipoForm] = useState({ nombre: "", descripcion: "", color: "295" })
+  const [showEquipoForm, setShowEquipoForm] = useState(false)
+  const [editingEquipo, setEditingEquipo] = useState(null)
+  const [savingEquipo, setSavingEquipo] = useState(false)
 
   useEffect(() => {
     if (!user) return
     setLoadingData(true)
-    getColleagues().then(data => {
-      setColleagues(data)
+    Promise.all([getColleagues(), getAllLogs(), getEquipos().catch(() => [])]).then(([cols, ls, eqs]) => {
+      setColleagues(cols)
+      setLogs(ls)
+      setEquipos(eqs)
       setLoadingData(false)
     })
   }, [user])
 
-  const handleExport = async (type) => {
-    setExporting(type)
-    const logs = await getAllLogs()
-    if (type === "pdf") exportPDF(colleagues, logs)
-    else exportExcel(colleagues, logs)
-    setExporting(null)
+  const reloadEquipos = () => getEquipos().then(setEquipos)
+
+  const handleSaveEquipo = async () => {
+    if (!equipoForm.nombre.trim()) return
+    setSavingEquipo(true)
+    if (editingEquipo) {
+      await updateEquipo(editingEquipo.id, { nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color })
+    } else {
+      await createEquipo({ nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color, miembros: [] })
+    }
+    await reloadEquipos()
+    setShowEquipoForm(false)
+    setEditingEquipo(null)
+    setEquipoForm({ nombre: "", descripcion: "", color: "295" })
+    setSavingEquipo(false)
   }
+
+  const handleDeleteEquipo = async (id) => {
+    await deleteEquipo(id)
+    reloadEquipos()
+  }
+
+  const handleToggleMember = async (equipoId, colleagueId) => {
+    const eq = equipos.find(e => e.id === equipoId)
+    if (!eq) return
+    const miembros = eq.miembros || []
+    const updated = miembros.includes(colleagueId)
+      ? miembros.filter(m => m !== colleagueId)
+      : [...miembros, colleagueId]
+    await updateEquipo(equipoId, { miembros: updated })
+    reloadEquipos()
+  }
+
+  // Map colleagueId → equipo nombre for badge
+  const colleagueEquipoMap = {}
+  equipos.forEach(eq => (eq.miembros || []).forEach(cid => { colleagueEquipoMap[cid] = eq }))
+
+  const COLORS = ["295", "260", "145", "55", "27", "316", "180", "220"]
 
   const totalProjects = colleagues.reduce((sum, c) => sum + (c.proyectos?.length || 0), 0)
   const totalTools = new Set(colleagues.flatMap(c => c.herramientas || [])).size
@@ -99,29 +140,54 @@ export default function Dashboard() {
       <main className="px-6 py-8 max-w-6xl mx-auto w-full flex-1">
 
         {/* ── Page header ── */}
-        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-7">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
           <div>
-            <h2 className="text-[30px] font-bold tracking-tight text-foreground leading-none">Mi equipo</h2>
+            <h2 className="text-[30px] font-bold tracking-tight text-foreground leading-none">
+              {tab === "equipo" ? "Mi equipo" : tab === "equipos" ? "Equipos" : "Análisis & Reportes"}
+            </h2>
             <p className="text-[13px] text-muted-foreground mt-1.5">
               Investigación e innovación · {colleagues.length} persona{colleagues.length !== 1 ? "s" : ""}
             </p>
           </div>
           {isAdmin && (
             <div className="flex items-center gap-2 flex-wrap">
-              <button onClick={() => handleExport("pdf")} disabled={!!exporting}
-                className="h-8 text-[12px] font-medium px-3 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all disabled:opacity-40">
-                {exporting === "pdf" ? "Generando…" : "↓ PDF"}
-              </button>
-              <button onClick={() => handleExport("xlsx")} disabled={!!exporting}
-                className="h-8 text-[12px] font-medium px-3 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all disabled:opacity-40">
-                {exporting === "xlsx" ? "Generando…" : "↓ Excel"}
-              </button>
-              <Button size="sm" className="h-8 text-[13px]" onClick={() => navigate("/colleague/new")}>
-                + Compañero
-              </Button>
+              {tab === "equipo" && (
+                <Button size="sm" className="h-8 text-[13px]" onClick={() => navigate("/colleague/new")}>
+                  + Compañero
+                </Button>
+              )}
+              {tab === "equipos" && (
+                <Button size="sm" className="h-8 text-[13px]"
+                  onClick={() => { setEditingEquipo(null); setEquipoForm({ nombre: "", descripcion: "", color: "295" }); setShowEquipoForm(true) }}>
+                  <Plus size={13} className="mr-1" /> Nuevo equipo
+                </Button>
+              )}
             </div>
           )}
         </div>
+
+        {/* ── Tabs (admin) ── */}
+        {isAdmin && (
+          <div className="flex gap-1 mb-6 border-b border-border">
+            {[
+              { key: "equipo", label: "Mi equipo", icon: <UserCircle size={14} /> },
+              { key: "equipos", label: "Equipos", icon: <Users size={14} /> },
+              { key: "metricas", label: "Análisis", icon: <BarChart2 size={14} /> },
+            ].map(t => (
+              <button key={t.key} onClick={() => setTab(t.key)}
+                className="flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-all border-b-2 -mb-px"
+                style={{
+                  borderColor: tab === t.key ? "oklch(0.62 0.22 295)" : "transparent",
+                  color: tab === t.key ? "oklch(0.62 0.22 295)" : "var(--muted-foreground)",
+                }}>
+                {t.icon}{t.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* ══ TAB: MI EQUIPO ══════════════════════════════════════════════ */}
+        {tab === "equipo" && <>
 
         {/* ── Stats strip skeleton ── */}
         {loadingData && (
@@ -274,12 +340,24 @@ export default function Dashboard() {
                           )}
                         </div>
                         <p className="text-[12px] text-muted-foreground mt-0.5 truncate">{c.rol || "Sin rol"}</p>
-                        {c.area && (
-                          <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full mt-1.5 leading-4"
-                            style={{ backgroundColor: `oklch(0.60 0.18 ${h} / 0.13)`, color: `oklch(0.50 0.20 ${h})` }}>
-                            {c.area}
-                          </span>
-                        )}
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {c.area && (
+                            <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full leading-4"
+                              style={{ backgroundColor: `oklch(0.60 0.18 ${h} / 0.13)`, color: `oklch(0.50 0.20 ${h})` }}>
+                              {c.area}
+                            </span>
+                          )}
+                          {colleagueEquipoMap[c.id] && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-full leading-4"
+                              style={{
+                                backgroundColor: `oklch(0.62 0.22 ${colleagueEquipoMap[c.id].color || "295"} / 0.13)`,
+                                color: `oklch(0.52 0.22 ${colleagueEquipoMap[c.id].color || "295"})`,
+                              }}>
+                              <Users size={9} />
+                              {colleagueEquipoMap[c.id].nombre}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -338,6 +416,156 @@ export default function Dashboard() {
             })}
           </div>
         )}
+
+        </> /* fin tab equipo */}
+
+        {/* ══ TAB: MÉTRICAS ════════════════════════════════════════════════ */}
+        {tab === "metricas" && (
+          <MetricsDashboard colleagues={colleagues} logs={logs} />
+        )}
+
+        {/* ══ TAB: EQUIPOS ═════════════════════════════════════════════════ */}
+        {tab === "equipos" && (
+          <div className="space-y-4">
+
+            {/* Formulario nuevo/editar equipo */}
+            {showEquipoForm && (
+              <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
+                <p className="text-[13px] font-semibold text-foreground">
+                  {editingEquipo ? "Editar equipo" : "Nuevo equipo"}
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input
+                    placeholder="Nombre del equipo *"
+                    value={equipoForm.nombre}
+                    onChange={e => setEquipoForm(f => ({ ...f, nombre: e.target.value }))}
+                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+                  />
+                  <input
+                    placeholder="Descripción (opcional)"
+                    value={equipoForm.descripcion}
+                    onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
+                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <p className="text-[12px] text-muted-foreground">Color:</p>
+                  {["295", "27", "145", "55", "316", "180"].map(hue => (
+                    <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
+                      className="w-5 h-5 rounded-full transition-transform hover:scale-110"
+                      style={{
+                        background: `oklch(0.62 0.22 ${hue})`,
+                        outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none",
+                        outlineOffset: 2,
+                      }} />
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
+                    {savingEquipo ? "Guardando…" : editingEquipo ? "Actualizar" : "Crear equipo"}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => { setShowEquipoForm(false); setEditingEquipo(null) }}>
+                    Cancelar
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Lista de equipos */}
+            {equipos.length === 0 && !showEquipoForm ? (
+              <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
+                <Users size={32} className="mb-3 opacity-30" />
+                <p className="font-semibold text-foreground text-[15px]">Sin equipos creados</p>
+                <p className="text-[13px] mt-1">Crea el primero con el botón de arriba.</p>
+              </div>
+            ) : (
+              equipos.map(eq => {
+                const eqColor = eq.color || "295"
+                const miembros = (eq.miembros || [])
+                  .map(cid => colleagues.find(c => c.id === cid))
+                  .filter(Boolean)
+                const noMiembros = colleagues.filter(c => !(eq.miembros || []).includes(c.id))
+                return (
+                  <div key={eq.id} className="bg-card border border-border rounded-2xl overflow-hidden"
+                    style={{ borderLeft: `3px solid oklch(0.62 0.22 ${eqColor})` }}>
+                    <div className="p-5">
+                      {/* Header equipo */}
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                              style={{ background: `oklch(0.62 0.22 ${eqColor})` }} />
+                            <h3 className="font-bold text-foreground text-[15px]">{eq.nombre}</h3>
+                          </div>
+                          {eq.descripcion && (
+                            <p className="text-[12px] text-muted-foreground mt-0.5 ml-4">{eq.descripcion}</p>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => {
+                            setEditingEquipo(eq)
+                            setEquipoForm({ nombre: eq.nombre, descripcion: eq.descripcion || "", color: eq.color || "295" })
+                            setShowEquipoForm(true)
+                          }} className="text-[12px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+                            <Pencil size={12} /> Editar
+                          </button>
+                          <button onClick={() => handleDeleteEquipo(eq.id)}
+                            className="text-[12px] text-destructive/70 hover:text-destructive transition-colors flex items-center gap-1">
+                            <Trash2 size={12} /> Eliminar
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Miembros actuales */}
+                      <div className="mb-3">
+                        <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">
+                          Miembros ({miembros.length})
+                        </p>
+                        {miembros.length === 0 ? (
+                          <p className="text-[12px] text-muted-foreground italic">Sin miembros aún.</p>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {miembros.map(c => {
+                              const ch = hashHue(c.id)
+                              return (
+                                <div key={c.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium"
+                                  style={{ background: `oklch(0.62 0.18 ${ch} / 0.12)`, color: `oklch(0.50 0.18 ${ch})` }}>
+                                  {c.nombre?.split(" ")[0]}
+                                  <button onClick={() => handleToggleMember(eq.id, c.id)}
+                                    className="opacity-50 hover:opacity-100 transition-opacity ml-0.5">
+                                    <X size={10} />
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Agregar miembros */}
+                      {noMiembros.length > 0 && (
+                        <div>
+                          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">
+                            Agregar al equipo
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {noMiembros.map(c => (
+                              <button key={c.id} onClick={() => handleToggleMember(eq.id, c.id)}
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-all">
+                                <Plus size={10} /> {c.nombre?.split(" ")[0]}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )}
+
       </main>
 
       <Footer />

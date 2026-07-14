@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email in [
+        "andrea_ramirezt@cun.edu.co",
+        "angela_bernalm@cun.edu.co",
+        "jose_forero@cun.edu.co"
+      ];
+    }
+
+    function isColleagueOwner(docId) {
+      return request.auth != null && (
+        request.auth.uid == get(/databases/$(database)/documents/companeros/$(docId)).data.uid ||
+        request.auth.token.email == get(/databases/$(database)/documents/companeros/$(docId)).data.email
+      );
+    }
+
+    // ── Compañeros ──────────────────────────────────────────────
+    match /companeros/{docId} {
+      allow read: if request.auth != null;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || isColleagueOwner(docId);
+
+      // Retroalimentación: solo admin escribe, el dueño y admin leen
+      match /retroalimentacion/{fbId} {
+        allow read: if request.auth != null && (isAdmin() || isColleagueOwner(docId));
+        allow create: if isAdmin();
+        allow update, delete: if isAdmin();
+      }
+
+      // Tareas: admin crea/elimina, dueño y admin actualizan, ambos leen
+      match /tareas/{taskId} {
+        allow read: if request.auth != null && (isAdmin() || isColleagueOwner(docId));
+        allow create, delete: if isAdmin();
+        allow update: if isAdmin() || isColleagueOwner(docId);
+      }
+    }
+
+    // ── Bitácora (logs) ─────────────────────────────────────────
+    match /logs/{logId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if isAdmin() ||
+        (request.auth != null && request.auth.uid == resource.data.creadoPor);
+    }
+
+    // ── Equipos ─────────────────────────────────────────────────
+    match /equipos/{equipoId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if isAdmin();
+    }
+
+  }
+}

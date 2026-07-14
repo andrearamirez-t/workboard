@@ -135,10 +135,25 @@ export default function ProjectForm() {
                   {form.avance}%
                 </span>
               </div>
-              <input type="range" name="avance" min="0" max="100" step="5"
-                value={form.avance} onChange={handleChange}
-                className="w-full h-2 rounded-full appearance-none cursor-pointer"
-                style={{ accentColor: form.avance >= 75 ? "oklch(0.60 0.18 145)" : form.avance >= 50 ? "oklch(0.60 0.18 260)" : form.avance >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)" }} />
+              {(() => {
+                const av = Number(form.avance)
+                const color = av >= 75 ? "oklch(0.60 0.18 145)" : av >= 50 ? "oklch(0.60 0.18 260)" : av >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)"
+                const track = `linear-gradient(to right, ${color} 0%, ${color} ${av}%, oklch(0.38 0.03 260 / 0.35) ${av}%, oklch(0.38 0.03 260 / 0.35) 100%)`
+                return (
+                  <>
+                    <style>{`
+                      .avance-range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--av-color); cursor: pointer; box-shadow: 0 0 0 3px oklch(0 0 0 / 0.25), 0 2px 6px oklch(0 0 0 / 0.35); transition: transform 0.1s; }
+                      .avance-range::-webkit-slider-thumb:hover { transform: scale(1.15); }
+                      .avance-range::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--av-color); cursor: pointer; border: none; box-shadow: 0 0 0 3px oklch(0 0 0 / 0.25); }
+                      .avance-range::-moz-range-track { background: oklch(0.38 0.03 260 / 0.35); border-radius: 999px; height: 8px; }
+                    `}</style>
+                    <input type="range" name="avance" min="0" max="100" step="5"
+                      value={form.avance} onChange={handleChange}
+                      className="avance-range w-full h-2 rounded-full appearance-none cursor-pointer"
+                      style={{ background: track, '--av-color': color }} />
+                  </>
+                )
+              })()}
               <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
                 <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
               </div>
