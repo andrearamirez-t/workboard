@@ -54,21 +54,26 @@ export default function Dashboard() {
   const handleSaveEquipo = async () => {
     if (!equipoForm.nombre.trim()) return
     setSavingEquipo(true)
-    if (editingEquipo) {
-      await updateEquipo(editingEquipo.id, { nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color })
-    } else {
-      await createEquipo({ nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color, miembros: [] })
+    try {
+      if (editingEquipo) {
+        await updateEquipo(editingEquipo.id, { nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color })
+      } else {
+        await createEquipo({ nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color, miembros: [] })
+      }
+      await reloadEquipos()
+      setShowEquipoForm(false)
+      setEditingEquipo(null)
+      setEquipoForm({ nombre: "", descripcion: "", color: "295" })
+    } catch (e) {
+      console.error("Error guardando equipo:", e)
+    } finally {
+      setSavingEquipo(false)
     }
-    await reloadEquipos()
-    setShowEquipoForm(false)
-    setEditingEquipo(null)
-    setEquipoForm({ nombre: "", descripcion: "", color: "295" })
-    setSavingEquipo(false)
   }
 
   const handleDeleteEquipo = async (id) => {
-    await deleteEquipo(id)
-    reloadEquipos()
+    try { await deleteEquipo(id) } catch (e) { console.error(e) }
+    reloadEquipos().catch(() => {})
   }
 
   const handleToggleMember = async (equipoId, colleagueId) => {
@@ -78,8 +83,8 @@ export default function Dashboard() {
     const updated = miembros.includes(colleagueId)
       ? miembros.filter(m => m !== colleagueId)
       : [...miembros, colleagueId]
-    await updateEquipo(equipoId, { miembros: updated })
-    reloadEquipos()
+    try { await updateEquipo(equipoId, { miembros: updated }) } catch (e) { console.error(e) }
+    reloadEquipos().catch(() => {})
   }
 
   // Map colleagueId → equipo nombre for badge
