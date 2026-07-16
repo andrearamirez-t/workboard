@@ -80,10 +80,15 @@ export default function Dashboard() {
     const eq = equipos.find(e => e.id === equipoId)
     if (!eq) return
     const miembros = eq.miembros || []
-    const updated = miembros.includes(colleagueId)
-      ? miembros.filter(m => m !== colleagueId)
-      : [...miembros, colleagueId]
-    try { await updateEquipo(equipoId, { miembros: updated }) } catch (e) { console.error(e) }
+    const memberUids = eq.memberUids || []
+    const colleague = colleagues.find(c => c.id === colleagueId)
+    const adding = !miembros.includes(colleagueId)
+    const updatedMiembros = adding ? [...miembros, colleagueId] : miembros.filter(m => m !== colleagueId)
+    const uid = colleague?.uid
+    const updatedUids = uid
+      ? (adding ? [...memberUids, uid] : memberUids.filter(u => u !== uid))
+      : memberUids
+    try { await updateEquipo(equipoId, { miembros: updatedMiembros, memberUids: updatedUids }) } catch (e) { console.error(e) }
     reloadEquipos().catch(() => {})
   }
 
@@ -148,7 +153,7 @@ export default function Dashboard() {
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
           <div>
             <h2 className="text-[30px] font-bold tracking-tight text-foreground leading-none">
-              {tab === "equipo" ? "Mi equipo" : tab === "equipos" ? "Equipos" : "Análisis & Reportes"}
+              {tab === "equipo" ? "Mi equipo" : tab === "equipos" ? "Grupos" : "Análisis & Reportes"}
             </h2>
             <p className="text-[13px] text-muted-foreground mt-1.5">
               Investigación e innovación · {colleagues.length} persona{colleagues.length !== 1 ? "s" : ""}
@@ -164,7 +169,7 @@ export default function Dashboard() {
               {tab === "equipos" && (
                 <Button size="sm" className="h-8 text-[13px]"
                   onClick={() => { setEditingEquipo(null); setEquipoForm({ nombre: "", descripcion: "", color: "295" }); setShowEquipoForm(true) }}>
-                  <Plus size={13} className="mr-1" /> Nuevo equipo
+                  <Plus size={13} className="mr-1" /> Nuevo grupo
                 </Button>
               )}
             </div>
@@ -176,7 +181,7 @@ export default function Dashboard() {
           <div className="flex gap-1 mb-6 border-b border-border">
             {[
               { key: "equipo", label: "Mi equipo", icon: <UserCircle size={14} /> },
-              { key: "equipos", label: "Equipos", icon: <Users size={14} /> },
+              { key: "equipos", label: "Grupos", icon: <Users size={14} /> },
               { key: "metricas", label: "Análisis", icon: <BarChart2 size={14} /> },
             ].map(t => (
               <button key={t.key} onClick={() => setTab(t.key)}
@@ -429,144 +434,238 @@ export default function Dashboard() {
           <MetricsDashboard colleagues={colleagues} logs={logs} />
         )}
 
-        {/* ══ TAB: EQUIPOS ═════════════════════════════════════════════════ */}
+        {/* ══ TAB: GRUPOS ══════════════════════════════════════════════════ */}
         {tab === "equipos" && (
           <div className="space-y-4">
 
-            {/* Formulario nuevo/editar equipo */}
-            {showEquipoForm && (
+            {/* Formulario crear nuevo grupo */}
+            {showEquipoForm && !editingEquipo && (
               <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
-                <p className="text-[13px] font-semibold text-foreground">
-                  {editingEquipo ? "Editar equipo" : "Nuevo equipo"}
-                </p>
+                <p className="text-[13px] font-semibold text-foreground">Nuevo grupo</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <input
-                    placeholder="Nombre del equipo *"
-                    value={equipoForm.nombre}
+                  <input placeholder="Nombre del grupo *" value={equipoForm.nombre}
                     onChange={e => setEquipoForm(f => ({ ...f, nombre: e.target.value }))}
-                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
-                  />
-                  <input
-                    placeholder="Descripción (opcional)"
-                    value={equipoForm.descripcion}
+                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                  <input placeholder="Descripción (opcional)" value={equipoForm.descripcion}
                     onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
-                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
-                  />
+                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
                 </div>
                 <div className="flex items-center gap-2">
                   <p className="text-[12px] text-muted-foreground">Color:</p>
                   {["295", "27", "145", "55", "316", "180"].map(hue => (
                     <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
                       className="w-5 h-5 rounded-full transition-transform hover:scale-110"
-                      style={{
-                        background: `oklch(0.62 0.22 ${hue})`,
-                        outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none",
-                        outlineOffset: 2,
-                      }} />
+                      style={{ background: `oklch(0.62 0.22 ${hue})`, outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none", outlineOffset: 2 }} />
                   ))}
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
-                    {savingEquipo ? "Guardando…" : editingEquipo ? "Actualizar" : "Crear equipo"}
+                    {savingEquipo ? "Guardando…" : "Crear grupo"}
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => { setShowEquipoForm(false); setEditingEquipo(null) }}>
-                    Cancelar
-                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setShowEquipoForm(false)}>Cancelar</Button>
                 </div>
               </div>
             )}
 
-            {/* Lista de equipos */}
-            {equipos.length === 0 && !showEquipoForm ? (
-              <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
-                <Users size={32} className="mb-3 opacity-30" />
-                <p className="font-semibold text-foreground text-[15px]">Sin equipos creados</p>
-                <p className="text-[13px] mt-1">Crea el primero con el botón de arriba.</p>
-              </div>
-            ) : (
-              equipos.map(eq => {
-                const eqColor = eq.color || "295"
-                const miembros = (eq.miembros || [])
-                  .map(cid => colleagues.find(c => c.id === cid))
-                  .filter(Boolean)
-                const noMiembros = colleagues.filter(c => !(eq.miembros || []).includes(c.id))
-                return (
-                  <div key={eq.id} className="bg-card border border-border rounded-2xl overflow-hidden"
-                    style={{ borderLeft: `3px solid oklch(0.62 0.22 ${eqColor})` }}>
-                    <div className="p-5">
-                      {/* Header equipo */}
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                              style={{ background: `oklch(0.62 0.22 ${eqColor})` }} />
-                            <h3 className="font-bold text-foreground text-[15px]">{eq.nombre}</h3>
-                          </div>
-                          {eq.descripcion && (
-                            <p className="text-[12px] text-muted-foreground mt-0.5 ml-4">{eq.descripcion}</p>
-                          )}
-                        </div>
-                        <div className="flex gap-2">
-                          <button onClick={() => {
-                            setEditingEquipo(eq)
-                            setEquipoForm({ nombre: eq.nombre, descripcion: eq.descripcion || "", color: eq.color || "295" })
-                            setShowEquipoForm(true)
-                          }} className="text-[12px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
-                            <Pencil size={12} /> Editar
-                          </button>
-                          <button onClick={() => handleDeleteEquipo(eq.id)}
-                            className="text-[12px] text-destructive/70 hover:text-destructive transition-colors flex items-center gap-1">
-                            <Trash2 size={12} /> Eliminar
-                          </button>
-                        </div>
-                      </div>
+            {/* Formulario editar grupo (panel separado arriba) */}
+            {editingEquipo && (
+              <div className="bg-card border border-border rounded-2xl p-5 space-y-4"
+                style={{ borderLeft: `3px solid oklch(0.62 0.22 ${equipoForm.color || "295"})` }}>
+                <p className="text-[13px] font-semibold text-foreground">Editando: {editingEquipo.nombre}</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input placeholder="Nombre *" value={equipoForm.nombre}
+                    onChange={e => setEquipoForm(f => ({ ...f, nombre: e.target.value }))}
+                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                  <input placeholder="Descripción (opcional)" value={equipoForm.descripcion}
+                    onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
+                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <p className="text-[12px] text-muted-foreground">Color:</p>
+                  {["295", "27", "145", "55", "316", "180"].map(hue => (
+                    <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
+                      className="w-5 h-5 rounded-full transition-transform hover:scale-110"
+                      style={{ background: `oklch(0.62 0.22 ${hue})`, outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none", outlineOffset: 2 }} />
+                  ))}
+                </div>
 
-                      {/* Miembros actuales */}
-                      <div className="mb-3">
+                {/* Miembros actuales con X */}
+                {(() => {
+                  const miembros = (editingEquipo.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
+                  const noMiembros = colleagues.filter(c => !(editingEquipo.miembros || []).includes(c.id))
+                  return (
+                    <>
+                      <div>
                         <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">
                           Miembros ({miembros.length})
                         </p>
-                        {miembros.length === 0 ? (
-                          <p className="text-[12px] text-muted-foreground italic">Sin miembros aún.</p>
-                        ) : (
-                          <div className="flex flex-wrap gap-2">
-                            {miembros.map(c => {
+                        {miembros.length === 0
+                          ? <p className="text-[12px] text-muted-foreground italic">Sin miembros aún.</p>
+                          : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                              {miembros.map(c => {
+                                const ch = hashHue(c.id)
+                                return (
+                                  <div key={c.id} className="flex items-center gap-3 p-3 rounded-xl border border-border"
+                                    style={{ background: `linear-gradient(135deg, var(--card), oklch(0.60 0.14 ${ch}/0.05))`, borderLeft: `3px solid oklch(0.62 0.18 ${ch})` }}>
+                                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-[12px] flex-shrink-0"
+                                      style={{ background: `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}>
+                                      {c.nombre?.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-[12px] font-semibold text-foreground truncate">{c.nombre?.split(" ").slice(0,2).join(" ")}</p>
+                                      <p className="text-[10px] text-muted-foreground truncate">{c.rol || "Sin rol"}</p>
+                                    </div>
+                                    <button onClick={() => handleToggleMember(editingEquipo.id, c.id)}
+                                      className="w-6 h-6 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors flex-shrink-0">
+                                      <X size={12} />
+                                    </button>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )
+                        }
+                      </div>
+                      {noMiembros.length > 0 && (
+                        <div>
+                          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Agregar al grupo</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {noMiembros.map(c => {
                               const ch = hashHue(c.id)
                               return (
-                                <div key={c.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium"
-                                  style={{ background: `oklch(0.62 0.18 ${ch} / 0.12)`, color: `oklch(0.50 0.18 ${ch})` }}>
-                                  {c.nombre?.split(" ")[0]}
-                                  <button onClick={() => handleToggleMember(eq.id, c.id)}
-                                    className="opacity-50 hover:opacity-100 transition-opacity ml-0.5">
-                                    <X size={10} />
-                                  </button>
-                                </div>
+                                <button key={c.id} onClick={() => handleToggleMember(editingEquipo.id, c.id)}
+                                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 hover:bg-muted/50 transition-all">
+                                  <div className="w-5 h-5 rounded flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
+                                    style={{ background: `oklch(0.68 0.18 ${ch})` }}>
+                                    {c.nombre?.charAt(0).toUpperCase()}
+                                  </div>
+                                  <span>{c.nombre?.split(" ").slice(0,2).join(" ")}</span>
+                                  {c.rol && <span className="text-[10px] opacity-50">· {c.rol.split(" ")[0]}</span>}
+                                  <Plus size={10} className="opacity-40" />
+                                </button>
                               )
                             })}
                           </div>
-                        )}
-                      </div>
-
-                      {/* Agregar miembros */}
-                      {noMiembros.length > 0 && (
-                        <div>
-                          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">
-                            Agregar al equipo
-                          </p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {noMiembros.map(c => (
-                              <button key={c.id} onClick={() => handleToggleMember(eq.id, c.id)}
-                                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-all">
-                                <Plus size={10} /> {c.nombre?.split(" ")[0]}
-                              </button>
-                            ))}
-                          </div>
                         </div>
                       )}
+                    </>
+                  )
+                })()}
+
+                <div className="flex gap-2 pt-1 border-t border-border">
+                  <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
+                    {savingEquipo ? "Guardando…" : "Guardar cambios"}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setEditingEquipo(null)}>Cancelar</Button>
+                </div>
+              </div>
+            )}
+
+            {/* Grid de grupos — estilo Mi equipo */}
+            {equipos.length === 0 && !showEquipoForm && !editingEquipo ? (
+              <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
+                <Users size={32} className="mb-3 opacity-30" />
+                <p className="font-semibold text-foreground text-[15px]">Sin grupos creados</p>
+                <p className="text-[13px] mt-1">Crea el primero con el botón de arriba.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {equipos.map(eq => {
+                  const eqColor = eq.color || "295"
+                  const miembros = (eq.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
+                  const isActive = editingEquipo?.id === eq.id
+                  return (
+                    <div key={eq.id}
+                      className="relative rounded-2xl overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => navigate(`/grupo/${eq.id}`)}
+                      style={{
+                        background: `linear-gradient(150deg, var(--card), oklch(0.60 0.14 ${eqColor} / 0.06))`,
+                        border: "1px solid var(--border)",
+                        borderLeft: `3px solid oklch(0.62 0.18 ${eqColor})`,
+                        boxShadow: isActive ? `0 0 0 2px oklch(0.62 0.22 ${eqColor} / 40%)` : "0 2px 10px oklch(0 0 0 / 7%)",
+                      }}>
+                      <div className="p-5">
+                        {/* Header */}
+                        <div className="flex items-start justify-between mb-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                                style={{ background: `oklch(0.62 0.22 ${eqColor})` }} />
+                              <h3 className="font-bold text-foreground text-[15px] truncate">{eq.nombre}</h3>
+                            </div>
+                            {eq.descripcion && (
+                              <p className="text-[12px] text-muted-foreground ml-4 truncate">{eq.descripcion}</p>
+                            )}
+                          </div>
+                          <div className="flex gap-2 ml-2 flex-shrink-0">
+                            <button onClick={e => { e.stopPropagation(); setEditingEquipo(eq); setEquipoForm({ nombre: eq.nombre, descripcion: eq.descripcion || "", color: eq.color || "295" }); setShowEquipoForm(false) }}
+                              className="text-[11px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5">
+                              <Pencil size={11} />
+                            </button>
+                            <button onClick={e => { e.stopPropagation(); handleDeleteEquipo(eq.id) }}
+                              className="text-[11px] text-destructive/60 hover:text-destructive transition-colors flex items-center gap-0.5">
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Avatares apilados */}
+                        {miembros.length > 0 && (
+                          <div className="flex items-center gap-1.5 mb-3">
+                            <div className="flex -space-x-2">
+                              {miembros.slice(0, 5).map(c => {
+                                const ch = hashHue(c.id)
+                                return (
+                                  <div key={c.id}
+                                    className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0"
+                                    style={{ background: `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}
+                                    title={c.nombre}>
+                                    {c.nombre?.charAt(0).toUpperCase()}
+                                  </div>
+                                )
+                              })}
+                              {miembros.length > 5 && (
+                                <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground ring-2 ring-card">
+                                  +{miembros.length - 5}
+                                </div>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-muted-foreground ml-1">
+                              {miembros.length} miembro{miembros.length !== 1 ? "s" : ""}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Lista de nombres clicables */}
+                        <div className="space-y-1.5">
+                          {miembros.length === 0 ? (
+                            <p className="text-[12px] text-muted-foreground italic">Sin miembros. Usa el lápiz para agregar.</p>
+                          ) : (
+                            miembros.map(c => {
+                              const ch = hashHue(c.id)
+                              return (
+                                <a key={c.id} href={`/colleague/${c.id}`} onClick={e => e.stopPropagation()}
+                                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-muted/60 transition-colors group">
+                                  <div className="w-6 h-6 rounded flex items-center justify-center text-white font-bold text-[10px] flex-shrink-0"
+                                    style={{ background: `oklch(0.68 0.18 ${ch})` }}>
+                                    {c.nombre?.charAt(0).toUpperCase()}
+                                  </div>
+                                  <span className="text-[12px] font-medium text-foreground truncate flex-1">
+                                    {c.nombre?.split(" ").slice(0,2).join(" ")}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground truncate">{c.rol?.split(" ")[0]}</span>
+                                  <span className="text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity ml-auto">→</span>
+                                </a>
+                              )
+                            })
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )
-              })
+                  )
+                })}
+              </div>
             )}
           </div>
         )}

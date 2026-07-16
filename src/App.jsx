@@ -6,6 +6,7 @@ import ColleagueForm from "@/pages/ColleagueForm"
 import ColleagueDetail from "@/pages/ColleagueDetail"
 import ProjectForm from "@/pages/ProjectForm"
 import Bitacora from "@/pages/Bitacora"
+import GroupDetail from "@/pages/GroupDetail"
 import NotFound from "@/pages/NotFound"
 
 function ProtectedRoute({ children }) {
@@ -24,6 +25,7 @@ export default function App() {
       <Route path="/colleague/:id/edit" element={<ProtectedRoute><ColleagueForm /></ProtectedRoute>} />
       <Route path="/colleague/:id/project/new" element={<ProtectedRoute><ProjectForm /></ProtectedRoute>} />
       <Route path="/bitacora" element={<ProtectedRoute><Bitacora /></ProtectedRoute>} />
+      <Route path="/grupo/:id" element={<ProtectedRoute><GroupDetail /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   )

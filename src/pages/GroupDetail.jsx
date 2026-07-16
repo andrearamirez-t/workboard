@@ -1,0 +1,815 @@
+import { useEffect, useState, useRef } from "react"
+import { useParams, useNavigate } from "react-router-dom"
+import { useAuth } from "@/context/AuthContext"
+import { ThemeToggle } from "@/components/ui/ThemeToggle"
+import { Footer } from "@/components/ui/Footer"
+import { Button } from "@/components/ui/button"
+import { format } from "date-fns"
+import { es } from "date-fns/locale"
+import EmojiPicker from "emoji-picker-react"
+import {
+  getGrupo, addGrupoProject, deleteGrupoProject, updateGrupoProject,
+  addGrupoLog, getGrupoLogs, deleteGrupoLog, updateGrupoLog,
+  addGrupoTask, getGrupoTasks, updateGrupoTask, updateGrupoTaskStatus, deleteGrupoTask,
+  addGrupoFeedback, getGrupoFeedback, deleteGrupoFeedback, updateGrupoFeedback,
+} from "@/services/groups.service"
+import { notificarTareaCompletada } from "@/services/notificaciones.service"
+import { getColleagues } from "@/services/colleagues.service"
+import { Pencil, Trash2, Check, X, Plus, ChevronDown, ChevronUp } from "lucide-react"
+
+const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
+
+const ESTADOS = ["Planificación", "En desarrollo", "En revisión", "Finalizado", "Pausado", "Entregado"]
+const STATE_COLOR = {
+  "Planificación": "260", "En desarrollo": "145", "En revisión": "55",
+  "Finalizado": "145", "Pausado": "27", "Entregado": "295",
+}
+
+function hashHue(str) {
+  let h = 0
+  for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h)
+  return Math.abs(h * 137.508) % 360
+}
+
+function avanceColor(v) {
+  return v >= 75 ? "oklch(0.55 0.18 145)" : v >= 50 ? "oklch(0.55 0.18 260)" : v >= 25 ? "oklch(0.60 0.18 55)" : "oklch(0.60 0.20 27)"
+}
+
+const EMPTY_PROJECT = { nombre: "", estado: "En desarrollo", avance: 0, area: "", queHace: "", herramientas: "", fechaInicio: "", fechaEntrega: "", observaciones: "" }
+
+export default function GroupDetail() {
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const { user, myColleagueId } = useAuth()
+  const isAdmin = ADMIN_EMAILS.includes(user?.email)
+
+  const [grupo, setGrupo] = useState(null)
+  const [colleagues, setColleagues] = useState([])
+  const [logs, setLogs] = useState([])
+  const [tasks, setTasks] = useState([])
+  const [feedback, setFeedback] = useState([])
+
+  // Bitácora
+  const [nota, setNota] = useState("")
+  const [savingLog, setSavingLog] = useState(false)
+  const [editingLogId, setEditingLogId] = useState(null)
+  const [editingLogText, setEditingLogText] = useState("")
+  const [showEmoji, setShowEmoji] = useState(false)
+  const notaRef = useRef(null)
+
+  // Proyectos
+  const [showProjectForm, setShowProjectForm] = useState(false)
+  const [editingProject, setEditingProject] = useState(null)
+  const [projectForm, setProjectForm] = useState(EMPTY_PROJECT)
+  const [savingProject, setSavingProject] = useState(false)
+  const [projectSearch, setProjectSearch] = useState("")
+
+  // Tareas
+  const [showTaskForm, setShowTaskForm] = useState(false)
+  const [taskForm, setTaskForm] = useState({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
+  const [savingTask, setSavingTask] = useState(false)
+  const [editingTaskId, setEditingTaskId] = useState(null)
+  const [editingTaskForm, setEditingTaskForm] = useState({})
+
+  // Retroalimentación
+  const [feedbackText, setFeedbackText] = useState("")
+  const [savingFeedback, setSavingFeedback] = useState(false)
+  const [editingFbId, setEditingFbId] = useState(null)
+  const [editingFbText, setEditingFbText] = useState("")
+
+  // Secciones colapsables
+  const [openSections, setOpenSections] = useState({ proyectos: true, bitacora: true, tareas: true, feedback: true })
+  const toggleSection = (s) => setOpenSections(prev => ({ ...prev, [s]: !prev[s] }))
+
+  const [loadingData, setLoadingData] = useState(true)
+
+  // ── Carga de datos ──────────────────────────────────────────────────────
+  const loadAll = async () => {
+    setLoadingData(true)
+    try {
+      const [g, cols] = await Promise.all([getGrupo(id), getColleagues()])
+      setGrupo(g)
+      setColleagues(cols)
+      // compute membership immediately so we can gate the rest
+      const member = g && (g.miembros || []).some(cid => {
+        const c = cols.find(col => col.id === cid)
+        return c && (c.uid === user?.uid || c.email === user?.email)
+      })
+      if (isAdmin || member) {
+        const [ls, ts, fb] = await Promise.all([
+          getGrupoLogs(id),
+          getGrupoTasks(id),
+          getGrupoFeedback(id),
+        ])
+        setLogs(ls)
+        setTasks(ts)
+        setFeedback(fb)
+      }
+    } finally { setLoadingData(false) }
+  }
+
+  useEffect(() => { loadAll() }, [id])
+
+  const isMember = grupo && (grupo.miembros || []).some(cid => {
+    const c = colleagues.find(col => col.id === cid)
+    return c && (c.uid === user?.uid || c.email === user?.email)
+  })
+  const canAccess = isAdmin || isMember
+  const canLog = isAdmin || isMember
+
+  // ── Bitácora ─────────────────────────────────────────────────────────────
+  const handleAddLog = async () => {
+    if (!nota.trim()) return
+    setSavingLog(true)
+    try {
+      await addGrupoLog(id, nota.trim(), user)
+      setNota("")
+      setLogs(await getGrupoLogs(id))
+    } finally { setSavingLog(false) }
+  }
+
+  const handleDeleteLog = async (logId) => {
+    await deleteGrupoLog(id, logId)
+    setLogs(prev => prev.filter(l => l.id !== logId))
+  }
+
+  const handleSaveEditLog = async (logId) => {
+    if (!editingLogText.trim()) return
+    await updateGrupoLog(id, logId, editingLogText.trim())
+    setLogs(prev => prev.map(l => l.id === logId ? { ...l, nota: editingLogText.trim() } : l))
+    setEditingLogId(null)
+  }
+
+  // ── Proyectos ─────────────────────────────────────────────────────────────
+  const handleSaveProject = async () => {
+    if (!projectForm.nombre.trim()) return
+    setSavingProject(true)
+    try {
+      const data = {
+        ...projectForm,
+        avance: Number(projectForm.avance),
+        herramientas: projectForm.herramientas ? projectForm.herramientas.split(",").map(s => s.trim()).filter(Boolean) : [],
+      }
+      if (editingProject) {
+        await updateGrupoProject(id, editingProject, data)
+      } else {
+        await addGrupoProject(id, data)
+      }
+      const g = await getGrupo(id)
+      setGrupo(g)
+      setShowProjectForm(false)
+      setEditingProject(null)
+      setProjectForm(EMPTY_PROJECT)
+    } finally { setSavingProject(false) }
+  }
+
+  const handleDeleteProject = async (proyecto) => {
+    await deleteGrupoProject(id, proyecto)
+    setGrupo(prev => ({ ...prev, proyectos: (prev.proyectos || []).filter(p => p !== proyecto) }))
+  }
+
+  const openEditProject = (p) => {
+    setEditingProject(p)
+    setProjectForm({ ...p, herramientas: (p.herramientas || []).join(", ") })
+    setShowProjectForm(true)
+  }
+
+  // ── Tareas ────────────────────────────────────────────────────────────────
+  const handleAddTask = async () => {
+    if (!taskForm.titulo.trim()) return
+    setSavingTask(true)
+    try {
+      await addGrupoTask(id, taskForm)
+      if (Number(taskForm.avance) >= 100) {
+        notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), grupoNombre: grupo?.nombre, path: `/grupo/${id}` }).catch(() => {})
+      }
+      setTasks(await getGrupoTasks(id))
+      setTaskForm({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
+      setShowTaskForm(false)
+    } finally { setSavingTask(false) }
+  }
+
+  const handleTaskStatus = async (taskId, estado) => {
+    await updateGrupoTaskStatus(id, taskId, estado)
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, estado } : t))
+  }
+
+  const handleDeleteTask = async (taskId) => {
+    await deleteGrupoTask(id, taskId)
+    setTasks(prev => prev.filter(t => t.id !== taskId))
+  }
+
+  const handleSaveEditTask = async (task) => {
+    if (!editingTaskForm.titulo?.trim()) return
+    const prevAvance = task.avance ?? 0
+    const newAvance = Number(editingTaskForm.avance) || 0
+    const data = {
+      titulo: editingTaskForm.titulo.trim(),
+      descripcion: editingTaskForm.descripcion?.trim() || "",
+      fechaInicio: editingTaskForm.fechaInicio || null,
+      fechaLimite: editingTaskForm.fechaLimite || null,
+      avance: newAvance,
+    }
+    await updateGrupoTask(id, task.id, data)
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...data } : t))
+    if (prevAvance < 100 && newAvance >= 100) {
+      notificarTareaCompletada({ taskTitle: data.titulo, grupoNombre: grupo?.nombre, path: `/grupo/${id}` }).catch(() => {})
+    }
+    setEditingTaskId(null)
+  }
+
+  // ── Retroalimentación ─────────────────────────────────────────────────────
+  const handleAddFeedback = async () => {
+    if (!feedbackText.trim()) return
+    setSavingFeedback(true)
+    try {
+      await addGrupoFeedback(id, feedbackText.trim(), user)
+      setFeedbackText("")
+      setFeedback(await getGrupoFeedback(id))
+    } finally { setSavingFeedback(false) }
+  }
+
+  const handleDeleteFeedback = async (fbId) => {
+    await deleteGrupoFeedback(id, fbId)
+    setFeedback(prev => prev.filter(f => f.id !== fbId))
+  }
+
+  const handleSaveEditFeedback = async (fbId) => {
+    if (!editingFbText.trim()) return
+    await updateGrupoFeedback(id, fbId, editingFbText.trim())
+    setFeedback(prev => prev.map(f => f.id === fbId ? { ...f, texto: editingFbText.trim() } : f))
+    setEditingFbId(null)
+  }
+
+  if (loadingData || !grupo) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="animate-spin w-6 h-6 rounded-full border-2 border-primary border-t-transparent" />
+      </div>
+    )
+  }
+
+  if (!canAccess) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-3">
+        <p className="text-[15px] font-semibold text-foreground">Sin acceso</p>
+        <p className="text-[13px] text-muted-foreground">Solo los miembros del grupo pueden ver este contenido.</p>
+        <button onClick={() => navigate("/dashboard")} className="text-[13px] text-primary hover:underline mt-2">← Volver al dashboard</button>
+      </div>
+    )
+  }
+
+  const hue = grupo.color || "295"
+  const miembros = (grupo.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
+  const proyectos = (grupo.proyectos || []).filter(p =>
+    !projectSearch || p.nombre?.toLowerCase().includes(projectSearch.toLowerCase())
+  )
+  const tareasPendientes = tasks.filter(t => t.estado !== "Hecho")
+  const tareasHechas = tasks.filter(t => t.estado === "Hecho")
+
+  const inputCls = "w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30"
+  const labelCls = "text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1"
+  const sectionHeaderCls = "flex items-center justify-between mb-4 cursor-pointer select-none"
+
+  return (
+    <div className="min-h-screen bg-background flex flex-col">
+      {/* ── Header ── */}
+      <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
+        style={{ backgroundColor: "color-mix(in srgb, var(--background) 82%, transparent)", backdropFilter: "blur(20px)" }}>
+        <button onClick={() => navigate("/dashboard?tab=equipos")}
+          className="flex items-center gap-2 text-[13px] text-muted-foreground hover:text-foreground transition-colors">
+          ← Volver
+        </button>
+        <ThemeToggle />
+      </header>
+
+      <main className="px-6 py-8 max-w-4xl mx-auto w-full flex-1 space-y-6">
+
+        {/* ── Cabecera del grupo ── */}
+        <div className="rounded-2xl border border-border p-6 relative overflow-hidden"
+          style={{
+            background: `linear-gradient(135deg, var(--card), oklch(0.60 0.14 ${hue} / 0.07))`,
+            borderLeft: `4px solid oklch(0.62 0.22 ${hue})`,
+          }}>
+          <div className="absolute top-0 right-0 w-40 h-40 pointer-events-none opacity-15"
+            style={{ background: `radial-gradient(circle at top right, oklch(0.65 0.22 ${hue}), transparent 70%)`, filter: "blur(30px)" }} />
+          <div className="flex items-start gap-4 relative">
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white text-xl font-bold flex-shrink-0"
+              style={{ background: `linear-gradient(135deg, oklch(0.62 0.22 ${hue}), oklch(0.50 0.24 ${(Number(hue)+40)%360}))` }}>
+              {grupo.nombre?.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-[24px] font-bold text-foreground leading-tight">{grupo.nombre}</h1>
+              {grupo.descripcion && <p className="text-[13px] text-muted-foreground mt-0.5">{grupo.descripcion}</p>}
+              {miembros.length > 0 && (
+                <div className="flex items-center gap-2 mt-3">
+                  <div className="flex -space-x-2">
+                    {miembros.slice(0, 6).map(c => {
+                      const ch = hashHue(c.id)
+                      return (
+                        <a key={c.id} href={`/colleague/${c.id}`}
+                          className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0 hover:z-10 hover:scale-110 transition-transform"
+                          style={{ background: `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}
+                          title={c.nombre}>
+                          {c.nombre?.charAt(0).toUpperCase()}
+                        </a>
+                      )
+                    })}
+                    {miembros.length > 6 && (
+                      <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground ring-2 ring-card">
+                        +{miembros.length - 6}
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[12px] text-muted-foreground">{miembros.length} miembro{miembros.length !== 1 ? "s" : ""}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ══ PROYECTOS ══════════════════════════════════════════════════════ */}
+        <section className="bg-card border border-border rounded-2xl p-5">
+          <div className={sectionHeaderCls} onClick={() => toggleSection("proyectos")}>
+            <div className="flex items-center gap-3">
+              <h2 className="text-[16px] font-bold text-foreground">Proyectos</h2>
+              <span className="text-[12px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{grupo.proyectos?.length || 0}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {isAdmin && openSections.proyectos && (
+                <button onClick={e => { e.stopPropagation(); setEditingProject(null); setProjectForm(EMPTY_PROJECT); setShowProjectForm(v => !v) }}
+                  className="flex items-center gap-1 text-[12px] font-medium px-3 py-1 rounded-lg"
+                  style={{ background: `oklch(0.62 0.22 ${hue} / 0.12)`, color: `oklch(0.52 0.22 ${hue})` }}>
+                  <Plus size={12} /> Proyecto
+                </button>
+              )}
+              {openSections.proyectos ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
+            </div>
+          </div>
+
+          {openSections.proyectos && (
+            <>
+              {/* Formulario proyecto */}
+              {showProjectForm && isAdmin && (
+                <div className="bg-muted/40 border border-border rounded-xl p-4 mb-4 space-y-3">
+                  <p className="text-[13px] font-semibold text-foreground">{editingProject ? "Editar proyecto" : "Nuevo proyecto"}</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <p className={labelCls}>Nombre *</p>
+                      <input placeholder="Nombre del proyecto" value={projectForm.nombre}
+                        onChange={e => setProjectForm(f => ({ ...f, nombre: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div>
+                      <p className={labelCls}>Estado</p>
+                      <select value={projectForm.estado} onChange={e => setProjectForm(f => ({ ...f, estado: e.target.value }))}
+                        className={inputCls}>
+                        {ESTADOS.map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <p className={labelCls}>Área</p>
+                      <input placeholder="Área o enfoque" value={projectForm.area}
+                        onChange={e => setProjectForm(f => ({ ...f, area: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div>
+                      <p className={labelCls}>Herramientas (separadas por coma)</p>
+                      <input placeholder="React, Firebase, Python…" value={projectForm.herramientas}
+                        onChange={e => setProjectForm(f => ({ ...f, herramientas: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div>
+                      <p className={labelCls}>Fecha inicio</p>
+                      <input type="date" value={projectForm.fechaInicio}
+                        onChange={e => setProjectForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div>
+                      <p className={labelCls}>Fecha entrega</p>
+                      <input type="date" value={projectForm.fechaEntrega}
+                        onChange={e => setProjectForm(f => ({ ...f, fechaEntrega: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <p className={labelCls}>Qué hace</p>
+                      <textarea placeholder="Descripción del proyecto…" value={projectForm.queHace}
+                        onChange={e => setProjectForm(f => ({ ...f, queHace: e.target.value }))}
+                        rows={2} className={inputCls + " resize-none"} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <p className={labelCls}>Avance: {projectForm.avance}%</p>
+                      <input type="range" min="0" max="100" step="5" value={projectForm.avance}
+                        onChange={e => setProjectForm(f => ({ ...f, avance: e.target.value }))}
+                        className="w-full accent-primary" />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <p className={labelCls}>Observaciones</p>
+                      <textarea placeholder="Notas adicionales…" value={projectForm.observaciones}
+                        onChange={e => setProjectForm(f => ({ ...f, observaciones: e.target.value }))}
+                        rows={2} className={inputCls + " resize-none"} />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={handleSaveProject} disabled={savingProject}>
+                      {savingProject ? "Guardando…" : editingProject ? "Actualizar" : "Crear proyecto"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => { setShowProjectForm(false); setEditingProject(null) }}>Cancelar</Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Buscador */}
+              {(grupo.proyectos?.length || 0) > 3 && (
+                <input placeholder="Buscar proyecto…" value={projectSearch}
+                  onChange={e => setProjectSearch(e.target.value)}
+                  className={inputCls + " mb-3"} />
+              )}
+
+              {/* Lista proyectos */}
+              {proyectos.length === 0 ? (
+                <p className="text-[13px] text-muted-foreground italic py-4">
+                  {grupo.proyectos?.length > 0 ? "Sin coincidencias." : "Sin proyectos aún."}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {proyectos.map((p, i) => {
+                    const stateHue = STATE_COLOR[p.estado] || "260"
+                    const av = p.avance ?? 0
+                    return (
+                      <div key={i} className="border border-border rounded-xl p-4 relative"
+                        style={{ borderLeft: `3px solid oklch(0.62 0.18 ${stateHue})` }}>
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-foreground text-[14px]">{p.nombre}</span>
+                              {p.estado && (
+                                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                                  style={{ background: `oklch(0.62 0.18 ${stateHue} / 0.13)`, color: `oklch(0.52 0.20 ${stateHue})` }}>
+                                  {p.estado}
+                                </span>
+                              )}
+                              {p.area && (
+                                <span className="text-[11px] text-muted-foreground px-2 py-0.5 rounded-full bg-muted">{p.area}</span>
+                              )}
+                            </div>
+                          </div>
+                          {isAdmin && (
+                            <div className="flex gap-2 flex-shrink-0">
+                              <button onClick={() => openEditProject(p)} className="text-muted-foreground hover:text-foreground transition-colors">
+                                <Pencil size={13} />
+                              </button>
+                              <button onClick={() => handleDeleteProject(p)} className="text-destructive/60 hover:text-destructive transition-colors">
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {/* Avance */}
+                        <div className="mb-2">
+                          <div className="flex justify-between text-[11px] mb-1">
+                            <span className="text-muted-foreground">Avance</span>
+                            <span style={{ color: avanceColor(av) }} className="font-semibold">{av}%</span>
+                          </div>
+                          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "oklch(0.40 0.02 260 / 0.3)" }}>
+                            <div className="h-full rounded-full" style={{ width: `${av}%`, background: avanceColor(av) }} />
+                          </div>
+                        </div>
+                        {p.queHace && <p className="text-[12.5px] text-muted-foreground mb-2 leading-relaxed">{p.queHace}</p>}
+                        {p.herramientas?.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mb-2">
+                            {p.herramientas.map(h => (
+                              <span key={h} className="text-[11px] px-2 py-0.5 rounded-md bg-muted text-muted-foreground">{h}</span>
+                            ))}
+                          </div>
+                        )}
+                        {(p.fechaInicio || p.fechaEntrega) && (
+                          <div className="flex gap-4 text-[11px] text-muted-foreground">
+                            {p.fechaInicio && <span>Inicio: <strong>{p.fechaInicio}</strong></span>}
+                            {p.fechaEntrega && <span>Entrega: <strong>{p.fechaEntrega}</strong></span>}
+                          </div>
+                        )}
+                        {p.observaciones && (
+                          <p className="text-[12px] text-muted-foreground mt-2 italic">{p.observaciones}</p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        {/* ══ BITÁCORA ════════════════════════════════════════════════════════ */}
+        <section className="bg-card border border-border rounded-2xl p-5">
+          <div className={sectionHeaderCls} onClick={() => toggleSection("bitacora")}>
+            <div className="flex items-center gap-3">
+              <h2 className="text-[16px] font-bold text-foreground">Bitácora</h2>
+              <span className="text-[12px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{logs.length}</span>
+            </div>
+            {openSections.bitacora ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
+          </div>
+
+          {openSections.bitacora && (
+            <>
+              {/* Entrada */}
+              {canLog && (
+                <div className="mb-4 relative">
+                  <textarea
+                    ref={notaRef}
+                    placeholder="Escribe una nota del grupo…"
+                    value={nota}
+                    onChange={e => setNota(e.target.value)}
+                    rows={3}
+                    className={inputCls + " resize-none pr-10"}
+                  />
+                  <button className="absolute right-3 bottom-3 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowEmoji(v => !v)}>😊</button>
+                  {showEmoji && (
+                    <div className="absolute right-0 top-full mt-1 z-50">
+                      <EmojiPicker onEmojiClick={e => { setNota(n => n + e.emoji); setShowEmoji(false); notaRef.current?.focus() }} height={350} width={300} />
+                    </div>
+                  )}
+                  <Button size="sm" className="mt-2" onClick={handleAddLog} disabled={savingLog || !nota.trim()}>
+                    {savingLog ? "Guardando…" : "Agregar nota"}
+                  </Button>
+                </div>
+              )}
+
+              {/* Lista */}
+              {logs.length === 0 ? (
+                <p className="text-[13px] text-muted-foreground italic">Sin notas aún.</p>
+              ) : (
+                <div className="space-y-3">
+                  {logs.map(l => {
+                    const canEditLog = isAdmin || l.creadoPor === user?.uid
+                    return (
+                      <div key={l.id} className="border border-border/60 rounded-xl p-4">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex-1">
+                            {editingLogId === l.id ? (
+                              <div className="space-y-2">
+                                <textarea value={editingLogText} onChange={e => setEditingLogText(e.target.value)}
+                                  rows={3} className={inputCls + " resize-none"} />
+                                <div className="flex gap-2">
+                                  <button onClick={() => handleSaveEditLog(l.id)}
+                                    className="text-[12px] text-primary flex items-center gap-1 hover:opacity-80"><Check size={12} /> Guardar</button>
+                                  <button onClick={() => setEditingLogId(null)}
+                                    className="text-[12px] text-muted-foreground flex items-center gap-1 hover:text-foreground"><X size={12} /> Cancelar</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{l.nota}</p>
+                            )}
+                            <div className="flex items-center gap-2 mt-1.5">
+                              <span className="text-[11px] text-muted-foreground font-medium">{l.creadoPorNombre}</span>
+                              {l.createdAt?.toDate && (
+                                <span className="text-[11px] text-muted-foreground capitalize">
+                                  · {format(l.createdAt.toDate(), "d 'de' MMM 'a las' HH:mm", { locale: es })}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {canEditLog && editingLogId !== l.id && (
+                            <div className="flex gap-2 flex-shrink-0">
+                              <button onClick={() => { setEditingLogId(l.id); setEditingLogText(l.nota) }}
+                                className="text-muted-foreground hover:text-foreground transition-colors"><Pencil size={13} /></button>
+                              <button onClick={() => handleDeleteLog(l.id)}
+                                className="text-destructive/60 hover:text-destructive transition-colors"><Trash2 size={13} /></button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        {/* ══ TAREAS ══════════════════════════════════════════════════════════ */}
+        <section className="bg-card border border-border rounded-2xl p-5">
+          <div className={sectionHeaderCls} onClick={() => toggleSection("tareas")}>
+            <div className="flex items-center gap-3">
+              <h2 className="text-[16px] font-bold text-foreground">Tareas</h2>
+              {tareasPendientes.length > 0 && (
+                <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full"
+                  style={{ background: "oklch(0.62 0.22 27 / 0.15)", color: "oklch(0.52 0.22 27)" }}>
+                  {tareasPendientes.length} pendiente{tareasPendientes.length !== 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {isAdmin && openSections.tareas && (
+                <button onClick={e => { e.stopPropagation(); setShowTaskForm(v => !v) }}
+                  className="flex items-center gap-1 text-[12px] font-medium px-3 py-1 rounded-lg"
+                  style={{ background: `oklch(0.62 0.22 ${hue} / 0.12)`, color: `oklch(0.52 0.22 ${hue})` }}>
+                  <Plus size={12} /> Tarea
+                </button>
+              )}
+              {openSections.tareas ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
+            </div>
+          </div>
+
+          {openSections.tareas && (
+            <>
+              {showTaskForm && isAdmin && (
+                <div className="bg-muted/40 border border-border rounded-xl p-4 mb-4 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
+                      <p className={labelCls}>Título *</p>
+                      <input placeholder="Título de la tarea" value={taskForm.titulo}
+                        onChange={e => setTaskForm(f => ({ ...f, titulo: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <p className={labelCls}>Descripción</p>
+                      <input placeholder="Descripción (opcional)" value={taskForm.descripcion}
+                        onChange={e => setTaskForm(f => ({ ...f, descripcion: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div>
+                      <p className={labelCls}>Fecha inicio</p>
+                      <input type="date" value={taskForm.fechaInicio}
+                        onChange={e => setTaskForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div>
+                      <p className={labelCls}>Fecha límite</p>
+                      <input type="date" value={taskForm.fechaLimite}
+                        onChange={e => setTaskForm(f => ({ ...f, fechaLimite: e.target.value }))} className={inputCls} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <p className={labelCls}>Avance inicial: {taskForm.avance}%</p>
+                      <input type="range" min="0" max="100" step="5" value={taskForm.avance}
+                        onChange={e => setTaskForm(f => ({ ...f, avance: Number(e.target.value) }))}
+                        className="w-full accent-primary" />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={handleAddTask} disabled={savingTask}>
+                      {savingTask ? "Guardando…" : "Crear tarea"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setShowTaskForm(false)}>Cancelar</Button>
+                  </div>
+                </div>
+              )}
+
+              {tasks.length === 0 ? (
+                <p className="text-[13px] text-muted-foreground italic">Sin tareas aún.</p>
+              ) : (
+                <div className="space-y-2">
+                  {[...tareasPendientes, ...tareasHechas].map(t => {
+                    const done = t.estado === "Hecho"
+                    return (
+                      <div key={t.id} className="p-3 rounded-xl border border-border/60 group">
+                        {editingTaskId === t.id ? (
+                          <div className="space-y-3">
+                            <input value={editingTaskForm.titulo}
+                              onChange={e => setEditingTaskForm(f => ({ ...f, titulo: e.target.value }))}
+                              placeholder="Título *" className={inputCls} />
+                            <input value={editingTaskForm.descripcion}
+                              onChange={e => setEditingTaskForm(f => ({ ...f, descripcion: e.target.value }))}
+                              placeholder="Descripción (opcional)" className={inputCls} />
+                            <div className="flex gap-3">
+                              <div className="flex-1">
+                                <p className={labelCls}>Fecha inicio</p>
+                                <input type="date" value={editingTaskForm.fechaInicio || ""}
+                                  onChange={e => setEditingTaskForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
+                              </div>
+                              <div className="flex-1">
+                                <p className={labelCls}>Fecha límite</p>
+                                <input type="date" value={editingTaskForm.fechaLimite || ""}
+                                  onChange={e => setEditingTaskForm(f => ({ ...f, fechaLimite: e.target.value }))} className={inputCls} />
+                              </div>
+                            </div>
+                            <div>
+                              <p className={labelCls}>Avance: {editingTaskForm.avance ?? 0}%</p>
+                              <input type="range" min="0" max="100" step="5" value={editingTaskForm.avance ?? 0}
+                                onChange={e => setEditingTaskForm(f => ({ ...f, avance: Number(e.target.value) }))}
+                                className="w-full accent-primary" />
+                            </div>
+                            <div className="flex gap-2">
+                              <Button size="sm" onClick={() => handleSaveEditTask(t)}>Guardar</Button>
+                              <Button size="sm" variant="outline" onClick={() => setEditingTaskId(null)}>Cancelar</Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-start gap-3">
+                            <button onClick={() => handleTaskStatus(t.id, done ? "Pendiente" : "Hecho")}
+                              className="flex-shrink-0 mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all"
+                              style={{ borderColor: done ? "oklch(0.55 0.18 145)" : "var(--border)", backgroundColor: done ? "oklch(0.55 0.18 145)" : "transparent" }}>
+                              {done && <Check size={10} className="text-white" />}
+                            </button>
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-[13px] font-medium leading-tight ${done ? "line-through text-muted-foreground" : "text-foreground"}`}>
+                                {t.titulo}
+                              </p>
+                              {t.descripcion && <p className="text-[11px] text-muted-foreground mt-0.5">{t.descripcion}</p>}
+                              {(t.avance != null && t.avance > 0) && (
+                                <div className="mt-1.5">
+                                  <div className="flex justify-between text-[10px] mb-0.5">
+                                    <span className="text-muted-foreground">Avance</span>
+                                    <span className="font-semibold" style={{ color: t.avance >= 100 ? "oklch(0.55 0.18 145)" : t.avance >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }}>
+                                      {t.avance}%
+                                    </span>
+                                  </div>
+                                  <div className="h-1.5 rounded-full overflow-hidden bg-muted">
+                                    <div className="h-full rounded-full" style={{ width: `${t.avance}%`, background: t.avance >= 100 ? "oklch(0.55 0.18 145)" : t.avance >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }} />
+                                  </div>
+                                </div>
+                              )}
+                              <div className="flex gap-3 mt-0.5 flex-wrap">
+                                {t.fechaInicio && <p className="text-[11px] text-muted-foreground">Inicio: {t.fechaInicio}</p>}
+                                {t.fechaLimite && <p className="text-[11px] text-muted-foreground">Límite: {t.fechaLimite}</p>}
+                              </div>
+                            </div>
+                            {isAdmin && (
+                              <div className="flex gap-1.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={() => { setEditingTaskId(t.id); setEditingTaskForm({ titulo: t.titulo, descripcion: t.descripcion || "", fechaInicio: t.fechaInicio || "", fechaLimite: t.fechaLimite || "", avance: t.avance ?? 0 }) }}
+                                  className="text-muted-foreground hover:text-foreground transition-colors"><Pencil size={13} /></button>
+                                <button onClick={() => handleDeleteTask(t.id)}
+                                  className="text-destructive/60 hover:text-destructive transition-colors"><Trash2 size={13} /></button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        {/* ══ RETROALIMENTACIÓN (admin escribe, grupo lee) ══════════════════ */}
+        <section className="bg-card border border-border rounded-2xl p-5">
+          <div className={sectionHeaderCls} onClick={() => toggleSection("feedback")}>
+            <div className="flex items-center gap-3">
+              <h2 className="text-[16px] font-bold text-foreground">Retroalimentación</h2>
+              <span className="text-[12px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{feedback.length}</span>
+            </div>
+            {openSections.feedback ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
+          </div>
+
+          {openSections.feedback && (
+            <>
+              {isAdmin && (
+                <div className="mb-4">
+                  <textarea placeholder="Escribe retroalimentación para el grupo…"
+                    value={feedbackText} onChange={e => setFeedbackText(e.target.value)}
+                    rows={3} className={inputCls + " resize-none"} />
+                  <Button size="sm" className="mt-2" onClick={handleAddFeedback} disabled={savingFeedback || !feedbackText.trim()}>
+                    {savingFeedback ? "Guardando…" : "Enviar"}
+                  </Button>
+                </div>
+              )}
+
+              {feedback.length === 0 ? (
+                <p className="text-[13px] text-muted-foreground italic">Sin retroalimentación aún.</p>
+              ) : (
+                <div className="space-y-3">
+                  {feedback.map(f => (
+                    <div key={f.id} className="border border-border/60 rounded-xl p-4">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex-1">
+                          {editingFbId === f.id ? (
+                            <div className="space-y-2">
+                              <textarea value={editingFbText} onChange={e => setEditingFbText(e.target.value)}
+                                rows={3} className={inputCls + " resize-none"} />
+                              <div className="flex gap-2">
+                                <button onClick={() => handleSaveEditFeedback(f.id)}
+                                  className="text-[12px] text-primary flex items-center gap-1"><Check size={12} /> Guardar</button>
+                                <button onClick={() => setEditingFbId(null)}
+                                  className="text-[12px] text-muted-foreground flex items-center gap-1"><X size={12} /> Cancelar</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{f.texto}</p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1.5">
+                            <span className="text-[11px] text-muted-foreground font-medium">{f.creadoPorNombre}</span>
+                            {f.createdAt?.toDate && (
+                              <span className="text-[11px] text-muted-foreground capitalize">
+                                · {format(f.createdAt.toDate(), "d 'de' MMM 'a las' HH:mm", { locale: es })}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {isAdmin && editingFbId !== f.id && (
+                          <div className="flex gap-2 flex-shrink-0">
+                            <button onClick={() => { setEditingFbId(f.id); setEditingFbText(f.texto) }}
+                              className="text-muted-foreground hover:text-foreground transition-colors"><Pencil size={13} /></button>
+                            <button onClick={() => handleDeleteFeedback(f.id)}
+                              className="text-destructive/60 hover:text-destructive transition-colors"><Trash2 size={13} /></button>
+                          </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+
+      </main>
+      <Footer />
+    </div>
+  )
+}

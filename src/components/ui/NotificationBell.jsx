@@ -24,59 +24,97 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
   const key = isAdmin
     ? storageKey("logs", userEmail)
     : storageKey("fb", myColleagueId)
+  const keyNotif = storageKey("notif", userEmail || "guest")
 
   // ── Listener en tiempo real ─────────────────────────────────────────────
   useEffect(() => {
     if (!isAdmin && !myColleagueId) return
 
-    let q
+    const unsubs = []
+
     if (isAdmin) {
-      q = query(collection(db, "logs"), orderBy("createdAt", "desc"))
+      // Notas del equipo
+      const qLogs = query(collection(db, "logs"), orderBy("createdAt", "desc"))
+      unsubs.push(onSnapshot(qLogs, (snap) => {
+        const readIds = getReadIds(key)
+        const fresh = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(doc => !readIds.has(doc.id))
+          .map(doc => ({
+            id: doc.id,
+            source: "log",
+            text: `${doc.colleagueName || "Alguien"} agregó una nota`,
+            sub: doc.nota?.slice(0, 70) + (doc.nota?.length > 70 ? "…" : ""),
+            date: doc.createdAt?.toDate?.(),
+            href: `/colleague/${doc.colleagueId}`,
+            dot: "oklch(0.60 0.22 27)",
+          }))
+        setItems(prev => [...prev.filter(i => i.source !== "log"), ...fresh])
+      }, () => {}))
+
+      // Tareas completadas al 100%
+      const qNotif = query(collection(db, "notificaciones"), orderBy("createdAt", "desc"))
+      unsubs.push(onSnapshot(qNotif, (snap) => {
+        const readIds = getReadIds(keyNotif)
+        const fresh = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(doc => !readIds.has(doc.id))
+          .map(doc => {
+            const quien = doc.assigneeName || doc.grupoNombre || "Un miembro"
+            return {
+              id: doc.id,
+              source: "notif",
+              text: `✓ Tarea completada al 100%`,
+              sub: `"${doc.taskTitle}" · ${quien}`,
+              date: doc.createdAt?.toDate?.(),
+              href: doc.path || "/dashboard",
+              dot: "oklch(0.55 0.18 145)",
+            }
+          })
+        setItems(prev => [...prev.filter(i => i.source !== "notif"), ...fresh])
+      }, () => {}))
     } else {
-      q = query(
+      const q = query(
         collection(db, "companeros", myColleagueId, "retroalimentacion"),
         orderBy("createdAt", "desc")
       )
+      unsubs.push(onSnapshot(q, (snap) => {
+        const readIds = getReadIds(key)
+        const fresh = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(doc => !readIds.has(doc.id))
+          .map(doc => ({
+            id: doc.id,
+            source: "fb",
+            text: `${doc.creadoPorNombre || "Admin"} te dejó retroalimentación`,
+            sub: doc.texto?.slice(0, 70) + (doc.texto?.length > 70 ? "…" : ""),
+            date: doc.createdAt?.toDate?.(),
+            href: `/colleague/${myColleagueId}`,
+            dot: "oklch(0.60 0.22 27)",
+          }))
+        setItems(fresh)
+      }, () => {}))
     }
 
-    const unsub = onSnapshot(q, (snap) => {
-      const readIds = getReadIds(key)
-      const fresh = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(doc => !readIds.has(doc.id))
-        .map(doc => isAdmin
-          ? {
-              id: doc.id,
-              text: `${doc.colleagueName || "Alguien"} agregó una nota`,
-              sub: doc.nota?.slice(0, 70) + (doc.nota?.length > 70 ? "…" : ""),
-              date: doc.createdAt?.toDate?.(),
-              href: `/colleague/${doc.colleagueId}`,
-            }
-          : {
-              id: doc.id,
-              text: `${doc.creadoPorNombre || "Admin"} te dejó retroalimentación`,
-              sub: doc.texto?.slice(0, 70) + (doc.texto?.length > 70 ? "…" : ""),
-              date: doc.createdAt?.toDate?.(),
-              href: `/colleague/${myColleagueId}`,
-            }
-        )
-      setItems(fresh)
-    }, () => { /* sin permiso — ignora */ })
+    return () => unsubs.forEach(u => u())
+  }, [isAdmin, myColleagueId, key, keyNotif])
 
-    return () => unsub()
-  }, [isAdmin, myColleagueId, key])
-
-  const markOne = (id) => {
-    const readIds = getReadIds(key)
+  const markOne = (id, source) => {
+    const k = source === "notif" ? keyNotif : key
+    const readIds = getReadIds(k)
     readIds.add(id)
-    saveReadIds(key, readIds)
+    saveReadIds(k, readIds)
     setItems(prev => prev.filter(i => i.id !== id))
   }
 
   const markAll = () => {
-    const readIds = getReadIds(key)
-    items.forEach(i => readIds.add(i.id))
-    saveReadIds(key, readIds)
+    const grouped = {}
+    items.forEach(i => {
+      const k = i.source === "notif" ? keyNotif : key
+      if (!grouped[k]) grouped[k] = getReadIds(k)
+      grouped[k].add(i.id)
+    })
+    Object.entries(grouped).forEach(([k, set]) => saveReadIds(k, set))
     setItems([])
   }
 
@@ -131,10 +169,10 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
             ) : (
               items.map(n => (
                 <a key={n.id} href={n.href}
-                  onClick={() => markOne(n.id)}
+                  onClick={() => markOne(n.id, n.source)}
                   className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 transition-colors border-b border-border/50 last:border-0">
                   <div className="w-1.5 h-1.5 rounded-full mt-[6px] flex-shrink-0"
-                    style={{ backgroundColor: "oklch(0.60 0.22 27)" }} />
+                    style={{ backgroundColor: n.dot || "oklch(0.60 0.22 27)" }} />
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] text-foreground leading-snug font-medium">{n.text}</p>
                     {n.sub && (

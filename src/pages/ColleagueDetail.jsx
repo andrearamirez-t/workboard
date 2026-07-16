@@ -5,7 +5,8 @@ import { db } from "@/services/firebase"
 import { deleteColleague, deleteProject } from "@/services/colleagues.service"
 import { addLog, getLogs, deleteLog, updateLog } from "@/services/logs.service"
 import { addFeedback, getFeedback, deleteFeedback, updateFeedback } from "@/services/feedback.service"
-import { addTask, getTasks, updateTaskStatus, deleteTask } from "@/services/tasks.service"
+import { addTask, getTasks, updateTask, updateTaskStatus, deleteTask } from "@/services/tasks.service"
+import { notificarTareaCompletada } from "@/services/notificaciones.service"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
@@ -81,9 +82,11 @@ export default function ColleagueDetail() {
   const [editingFbText, setEditingFbText] = useState("")
 
   const [tasks, setTasks] = useState([])
-  const [taskForm, setTaskForm] = useState({ titulo: "", descripcion: "", fechaLimite: "" })
+  const [taskForm, setTaskForm] = useState({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
   const [savingTask, setSavingTask] = useState(false)
   const [showTaskForm, setShowTaskForm] = useState(false)
+  const [editingTaskId, setEditingTaskId] = useState(null)
+  const [editingTaskForm, setEditingTaskForm] = useState({})
 
   const loadData = async () => {
     const snap = await getDoc(doc(db, "companeros", id))
@@ -107,7 +110,11 @@ export default function ColleagueDetail() {
     setSavingTask(true)
     try {
       await addTask(id, taskForm, user)
-      setTaskForm({ titulo: "", descripcion: "", fechaLimite: "" })
+      if (Number(taskForm.avance) >= 100) {
+        const c = colleagues?.find ? colleagues.find(c => c.id === id) : null
+        notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), assigneeName: c?.nombre || id, path: `/colleague/${id}` }).catch(() => {})
+      }
+      setTaskForm({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
       setShowTaskForm(false)
       setTasks(await getTasks(id))
     } catch (err) {
@@ -132,6 +139,29 @@ export default function ColleagueDetail() {
       setTasks(await getTasks(id))
     } catch (err) {
       console.error("[Workboard] Error eliminando tarea:", err.code, err.message)
+    }
+  }
+
+  const handleSaveEditTask = async (task) => {
+    if (!editingTaskForm.titulo?.trim()) return
+    const prevAvance = task.avance ?? 0
+    const newAvance = Number(editingTaskForm.avance) || 0
+    const data = {
+      titulo: editingTaskForm.titulo.trim(),
+      descripcion: editingTaskForm.descripcion?.trim() || "",
+      fechaInicio: editingTaskForm.fechaInicio || null,
+      fechaLimite: editingTaskForm.fechaLimite || null,
+      avance: newAvance,
+    }
+    try {
+      await updateTask(id, task.id, data)
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...data } : t))
+      if (prevAvance < 100 && newAvance >= 100) {
+        notificarTareaCompletada({ taskTitle: data.titulo, assigneeName: colleague?.nombre || id, path: `/colleague/${id}` }).catch(() => {})
+      }
+      setEditingTaskId(null)
+    } catch (err) {
+      console.error("[Workboard] Error editando tarea:", err.code, err.message)
     }
   }
 
@@ -810,12 +840,25 @@ export default function ColleagueDetail() {
                     placeholder="Descripción o instrucciones (opcional)"
                     rows={2}
                     className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none transition-all" />
-                  <div className="flex gap-3 items-end">
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="block text-[12px] font-medium text-muted-foreground mb-1">Fecha inicio</label>
+                      <input type="date" value={taskForm.fechaInicio} onChange={e => setTaskForm(f => ({ ...f, fechaInicio: e.target.value }))}
+                        className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 transition-all" />
+                    </div>
                     <div className="flex-1">
                       <label className="block text-[12px] font-medium text-muted-foreground mb-1">Fecha límite</label>
                       <input type="date" value={taskForm.fechaLimite} onChange={e => setTaskForm(f => ({ ...f, fechaLimite: e.target.value }))}
                         className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 transition-all" />
                     </div>
+                  </div>
+                  <div>
+                    <label className="block text-[12px] font-medium text-muted-foreground mb-1">Avance inicial: {taskForm.avance}%</label>
+                    <input type="range" min="0" max="100" step="5" value={taskForm.avance}
+                      onChange={e => setTaskForm(f => ({ ...f, avance: e.target.value }))}
+                      className="w-full accent-primary" />
+                  </div>
+                  <div className="flex justify-end">
                     <button type="submit" disabled={savingTask}
                       className="h-10 px-5 rounded-xl text-[13px] font-bold text-white transition-all hover:opacity-90 disabled:opacity-50"
                       style={{ background: "linear-gradient(135deg, oklch(0.58 0.20 260), oklch(0.50 0.22 280))" }}>
@@ -838,60 +881,133 @@ export default function ColleagueDetail() {
                   }
                   const st = estadoColors[task.estado] || estadoColors["Pendiente"]
                   return (
-                    <div key={task.id} className="bg-card border border-border rounded-xl p-4 group flex gap-3 items-start">
-                      {/* Checkbox de estado */}
-                      <button
-                        onClick={() => handleUpdateTaskStatus(task.id,
-                          task.estado === "Pendiente" ? "En proceso" : task.estado === "En proceso" ? "Hecha" : "Pendiente")}
-                        className="w-5 h-5 rounded-md border-2 flex-shrink-0 mt-0.5 transition-all hover:scale-110"
-                        style={{
-                          borderColor: st.color,
-                          backgroundColor: task.estado === "Hecha" ? st.color : "transparent",
-                        }}
-                        title="Cambiar estado">
-                        {task.estado === "Hecha" && (
-                          <svg viewBox="0 0 12 12" fill="none" className="w-full h-full p-0.5">
-                            <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        )}
-                        {task.estado === "En proceso" && (
-                          <div className="w-full h-full rounded-sm m-0.5" style={{ backgroundColor: st.color, margin: "2px" }} />
-                        )}
-                      </button>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className={`text-[14px] font-semibold leading-snug ${task.estado === "Hecha" ? "line-through text-muted-foreground" : "text-foreground"}`}>
-                            {task.titulo}
-                          </p>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
-                              style={{ color: st.color, backgroundColor: st.bg }}>
-                              {task.estado}
-                            </span>
-                            {isAdmin && (
-                              <button onClick={() => handleDeleteTask(task.id)}
-                                className="text-[11px] text-destructive opacity-0 group-hover:opacity-100 transition-opacity hover:opacity-70">
-                                ✕
-                              </button>
-                            )}
+                    <div key={task.id} className="bg-card border border-border rounded-xl p-4 group">
+                      {editingTaskId === task.id ? (
+                        /* ── Formulario edición inline ── */
+                        <div className="space-y-3">
+                          <input value={editingTaskForm.titulo}
+                            onChange={e => setEditingTaskForm(f => ({ ...f, titulo: e.target.value }))}
+                            placeholder="Título *"
+                            className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                          <textarea value={editingTaskForm.descripcion}
+                            onChange={e => setEditingTaskForm(f => ({ ...f, descripcion: e.target.value }))}
+                            placeholder="Descripción (opcional)" rows={2}
+                            className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none" />
+                          <div className="flex gap-3">
+                            <div className="flex-1">
+                              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Fecha inicio</label>
+                              <input type="date" value={editingTaskForm.fechaInicio || ""}
+                                onChange={e => setEditingTaskForm(f => ({ ...f, fechaInicio: e.target.value }))}
+                                className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                            </div>
+                            <div className="flex-1">
+                              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Fecha límite</label>
+                              <input type="date" value={editingTaskForm.fechaLimite || ""}
+                                onChange={e => setEditingTaskForm(f => ({ ...f, fechaLimite: e.target.value }))}
+                                className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                              Avance: <span className="font-bold text-foreground">{editingTaskForm.avance ?? 0}%</span>
+                            </label>
+                            <input type="range" min="0" max="100" step="5" value={editingTaskForm.avance ?? 0}
+                              onChange={e => setEditingTaskForm(f => ({ ...f, avance: Number(e.target.value) }))}
+                              className="w-full accent-primary" />
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => handleSaveEditTask(task)}
+                              className="h-8 px-4 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
+                              style={{ background: "linear-gradient(135deg, oklch(0.58 0.20 260), oklch(0.50 0.22 280))" }}>
+                              Guardar
+                            </button>
+                            <button onClick={() => setEditingTaskId(null)}
+                              className="h-8 px-4 rounded-xl text-[12px] font-medium border border-border text-muted-foreground hover:text-foreground transition-colors">
+                              Cancelar
+                            </button>
                           </div>
                         </div>
-                        {task.descripcion && (
-                          <p className="text-[12.5px] text-muted-foreground mt-1 leading-relaxed">{task.descripcion}</p>
-                        )}
-                        <div className="flex items-center gap-3 mt-1.5">
-                          {task.fechaLimite && (
-                            <span className={`text-[11px] font-medium ${vencida ? "text-destructive" : "text-muted-foreground"}`}>
-                              {vencida ? "⚠ Vencida · " : "Límite: "}
-                              {format(new Date(task.fechaLimite + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
-                            </span>
-                          )}
-                          <span className="text-[11px] text-muted-foreground/60">
-                            De: {task.creadoPorNombre}
-                          </span>
+                      ) : (
+                        /* ── Vista normal ── */
+                        <div className="flex gap-3 items-start">
+                          <button
+                            onClick={() => handleUpdateTaskStatus(task.id,
+                              task.estado === "Pendiente" ? "En proceso" : task.estado === "En proceso" ? "Hecha" : "Pendiente")}
+                            className="w-5 h-5 rounded-md border-2 flex-shrink-0 mt-0.5 transition-all hover:scale-110"
+                            style={{ borderColor: st.color, backgroundColor: task.estado === "Hecha" ? st.color : "transparent" }}
+                            title="Cambiar estado">
+                            {task.estado === "Hecha" && (
+                              <svg viewBox="0 0 12 12" fill="none" className="w-full h-full p-0.5">
+                                <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            )}
+                            {task.estado === "En proceso" && (
+                              <div className="w-full h-full rounded-sm" style={{ backgroundColor: st.color, margin: "2px" }} />
+                            )}
+                          </button>
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className={`text-[14px] font-semibold leading-snug ${task.estado === "Hecha" ? "line-through text-muted-foreground" : "text-foreground"}`}>
+                                {task.titulo}
+                              </p>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                                  style={{ color: st.color, backgroundColor: st.bg }}>
+                                  {task.estado}
+                                </span>
+                                {isAdmin && (
+                                  <button onClick={() => { setEditingTaskId(task.id); setEditingTaskForm({ titulo: task.titulo, descripcion: task.descripcion || "", fechaInicio: task.fechaInicio || "", fechaLimite: task.fechaLimite || "", avance: task.avance ?? 0 }) }}
+                                    className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                  </button>
+                                )}
+                                {isAdmin && (
+                                  <button onClick={() => handleDeleteTask(task.id)}
+                                    className="text-[11px] text-destructive opacity-0 group-hover:opacity-100 transition-opacity hover:opacity-70">
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {task.descripcion && (
+                              <p className="text-[12.5px] text-muted-foreground mt-1 leading-relaxed">{task.descripcion}</p>
+                            )}
+                            {/* Barra de avance */}
+                            {(task.avance != null && task.avance > 0) && (
+                              <div className="mt-2">
+                                <div className="flex justify-between text-[10px] mb-0.5">
+                                  <span className="text-muted-foreground">Avance</span>
+                                  <span className="font-semibold" style={{ color: task.avance >= 100 ? "oklch(0.55 0.18 145)" : task.avance >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }}>
+                                    {task.avance}%
+                                  </span>
+                                </div>
+                                <div className="h-1.5 rounded-full overflow-hidden bg-muted">
+                                  <div className="h-full rounded-full transition-all"
+                                    style={{
+                                      width: `${task.avance}%`,
+                                      background: task.avance >= 100 ? "oklch(0.55 0.18 145)" : task.avance >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)",
+                                    }} />
+                                </div>
+                              </div>
+                            )}
+                            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                              {task.fechaInicio && (
+                                <span className="text-[11px] text-muted-foreground">
+                                  Inicio: {format(new Date(task.fechaInicio + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                </span>
+                              )}
+                              {task.fechaLimite && (
+                                <span className={`text-[11px] font-medium ${vencida ? "text-destructive" : "text-muted-foreground"}`}>
+                                  {vencida ? "⚠ Vencida · " : "Límite: "}
+                                  {format(new Date(task.fechaLimite + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                </span>
+                              )}
+                              <span className="text-[11px] text-muted-foreground/60">De: {task.creadoPorNombre}</span>
+                            </div>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )
                 })}

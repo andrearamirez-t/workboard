@@ -23,3 +23,4 @@ export const updateEquipo = async (id, data) => {
 export const deleteEquipo = async (id) => {
   return await deleteDoc(doc(db, "equipos", id))
 }
+

@@ -5,7 +5,9 @@ export const addTask = async (colleagueId, task, author) => {
   return await addDoc(collection(db, "companeros", colleagueId, "tareas"), {
     titulo: task.titulo.trim(),
     descripcion: task.descripcion?.trim() || "",
+    fechaInicio: task.fechaInicio || null,
     fechaLimite: task.fechaLimite || null,
+    avance: Number(task.avance) || 0,
     estado: "Pendiente",
     creadoPorNombre: author.displayName || author.email,
     creadoPor: author.uid,
@@ -17,6 +19,10 @@ export const getTasks = async (colleagueId) => {
   const q = query(collection(db, "companeros", colleagueId, "tareas"), orderBy("createdAt", "desc"))
   const snap = await getDocs(q)
   return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+}
+
+export const updateTask = async (colleagueId, taskId, data) => {
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), data)
 }
 
 export const updateTaskStatus = async (colleagueId, taskId, estado) => {
