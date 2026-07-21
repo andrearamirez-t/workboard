@@ -1,11 +1,35 @@
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { doc, updateDoc, arrayUnion } from "firebase/firestore"
 import { db } from "@/services/firebase"
 import { updateProject } from "@/services/colleagues.service"
+import { uploadDocument, getDocuments, deleteDocument, MAX_FILE_SIZE } from "@/services/storage.service"
+import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
+
+function getFileTypeInfo(tipo, nombre) {
+  const ext = (nombre || "").split(".").pop().toLowerCase()
+  if (tipo?.includes("pdf") || ext === "pdf")
+    return { label: "PDF", color: "oklch(0.50 0.22 27)",  bg: "oklch(0.65 0.22 27 / 0.15)"  }
+  if (tipo?.includes("word") || ["doc","docx"].includes(ext))
+    return { label: "DOC", color: "oklch(0.50 0.20 260)", bg: "oklch(0.62 0.18 260 / 0.15)" }
+  if (tipo?.includes("sheet") || tipo?.includes("excel") || ["xls","xlsx"].includes(ext))
+    return { label: "XLS", color: "oklch(0.50 0.18 145)", bg: "oklch(0.55 0.18 145 / 0.15)" }
+  if (tipo?.includes("presentation") || ["ppt","pptx"].includes(ext))
+    return { label: "PPT", color: "oklch(0.55 0.22 35)",  bg: "oklch(0.65 0.20 35 / 0.15)"  }
+  if (tipo?.includes("image") || ["jpg","jpeg","png","gif","webp"].includes(ext))
+    return { label: "IMG", color: "oklch(0.50 0.18 295)", bg: "oklch(0.62 0.18 295 / 0.15)" }
+  return                  { label: "FILE", color: "oklch(0.55 0.04 270)", bg: "oklch(0.55 0.04 270 / 0.15)" }
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return ""
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 const AREAS = [
   "Desarrollo de Software", "Robótica", "Inteligencia Artificial",
@@ -18,11 +42,18 @@ export default function ProjectForm() {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
+  const { user, isAdmin } = useAuth()
   const editData = location.state?.editProject
   const isEdit = Boolean(editData)
 
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
+
+  // Documentos
+  const fileInputRef = useRef(null)
+  const [documents, setDocuments] = useState([])
+  const [uploadProgress, setUploadProgress] = useState(null)
+  const [uploadError, setUploadError] = useState(null)
   const [form, setForm] = useState({
     nombre: editData?.nombre || "",
     estado: editData?.estado || "",
@@ -44,6 +75,53 @@ export default function ProjectForm() {
     const updated = [...form.versiones]
     updated[i] = { ...updated[i], [key]: value }
     setForm(f => ({ ...f, versiones: updated }))
+  }
+
+  // Carga documentos del proyecto al entrar en modo edición
+  useEffect(() => {
+    if (isEdit && id && editData?.nombre) {
+      getDocuments(id).then(all =>
+        setDocuments(all.filter(d => d.proyectoNombre === editData.nombre))
+      )
+    }
+  }, [isEdit, id, editData?.nombre])
+
+  const handleFileSelected = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    const proyName = form.nombre.trim()
+    if (!proyName) return
+    if (file.size > MAX_FILE_SIZE) {
+      setUploadError("El archivo supera el límite de 15 MB.")
+      return
+    }
+    setUploadError(null)
+    setUploadProgress(0)
+    try {
+      const doc = await uploadDocument(id, file, {
+        onProgress: setUploadProgress,
+        uploadedBy: user?.uid,
+        uploadedByName: user?.displayName || user?.email,
+        proyectoNombre: proyName,
+      })
+      setDocuments(prev => [doc, ...prev])
+    } catch (err) {
+      console.error("[Workboard] Error subiendo archivo:", err)
+      setUploadError("No se pudo subir el archivo. Intenta de nuevo.")
+    } finally {
+      setUploadProgress(null)
+    }
+  }
+
+  const handleDeleteDoc = async (d) => {
+    if (!window.confirm(`¿Eliminar "${d.nombre}"?`)) return
+    try {
+      await deleteDocument(id, d.id, d.storagePath)
+      setDocuments(prev => prev.filter(x => x.id !== d.id))
+    } catch (err) {
+      console.error("[Workboard] Error eliminando documento:", err)
+    }
   }
 
   const handleSubmit = async (e) => {

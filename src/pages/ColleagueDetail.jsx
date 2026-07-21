@@ -7,6 +7,8 @@ import { addLog, getLogs, deleteLog, updateLog } from "@/services/logs.service"
 import { addFeedback, getFeedback, deleteFeedback, updateFeedback } from "@/services/feedback.service"
 import { addTask, getTasks, updateTask, updateTaskStatus, deleteTask } from "@/services/tasks.service"
 import { notificarTareaCompletada } from "@/services/notificaciones.service"
+import { queueTareaNotification } from "@/services/wpp.service"
+import { uploadDocument, getDocuments, deleteDocument, MAX_FILE_SIZE } from "@/services/storage.service"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
@@ -56,6 +58,28 @@ const VERSION_STATE_STYLE = {
   "Cancelado": { color: "oklch(0.65 0.22 27)",  bg: "oklch(0.65 0.22 27 / 0.12)"  },
 }
 
+function getFileTypeInfo(tipo, nombre) {
+  const ext = (nombre || "").split(".").pop().toLowerCase()
+  if (tipo?.includes("pdf") || ext === "pdf")
+    return { label: "PDF", color: "oklch(0.50 0.22 27)",  bg: "oklch(0.65 0.22 27 / 0.15)"  }
+  if (tipo?.includes("word") || ["doc","docx"].includes(ext))
+    return { label: "DOC", color: "oklch(0.50 0.20 260)", bg: "oklch(0.62 0.18 260 / 0.15)" }
+  if (tipo?.includes("sheet") || tipo?.includes("excel") || ["xls","xlsx"].includes(ext))
+    return { label: "XLS", color: "oklch(0.50 0.18 145)", bg: "oklch(0.55 0.18 145 / 0.15)" }
+  if (tipo?.includes("presentation") || ["ppt","pptx"].includes(ext))
+    return { label: "PPT", color: "oklch(0.55 0.22 35)",  bg: "oklch(0.65 0.20 35 / 0.15)"  }
+  if (tipo?.includes("image") || ["jpg","jpeg","png","gif","webp"].includes(ext))
+    return { label: "IMG", color: "oklch(0.50 0.18 295)", bg: "oklch(0.62 0.18 295 / 0.15)" }
+  return                  { label: "FILE", color: "oklch(0.55 0.04 270)", bg: "oklch(0.55 0.04 270 / 0.15)" }
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return ""
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export default function ColleagueDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -88,6 +112,13 @@ export default function ColleagueDetail() {
   const [editingTaskId, setEditingTaskId] = useState(null)
   const [editingTaskForm, setEditingTaskForm] = useState({})
 
+  const [documents, setDocuments] = useState([])
+  const [uploadProgress, setUploadProgress] = useState(null)
+  const [uploadError, setUploadError] = useState("")
+  const [uploadingForProject, setUploadingForProject] = useState(null)
+  const [openDocProjects, setOpenDocProjects] = useState(new Set())
+  const fileInputRef = useRef(null)
+
   const loadData = async () => {
     const snap = await getDoc(doc(db, "companeros", id))
     if (snap.exists()) setCompanero({ id: snap.id, ...snap.data() })
@@ -104,6 +135,10 @@ export default function ColleagueDetail() {
     if (isOwn || isAdmin) getTasks(id).then(setTasks)
   }, [id, isOwn, isAdmin])
 
+  useEffect(() => {
+    if (isOwn || isAdmin) getDocuments(id).then(setDocuments)
+  }, [id, isOwn, isAdmin])
+
   const handleAddTask = async (e) => {
     e.preventDefault()
     if (!taskForm.titulo.trim()) return
@@ -111,8 +146,14 @@ export default function ColleagueDetail() {
     try {
       await addTask(id, taskForm, user)
       if (Number(taskForm.avance) >= 100) {
-        const c = colleagues?.find ? colleagues.find(c => c.id === id) : null
-        notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), assigneeName: c?.nombre || id, path: `/colleague/${id}` }).catch(() => {})
+        notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), assigneeName: companero?.nombre || id, path: `/colleague/${id}` }).catch(() => {})
+      }
+      if (companero?.whatsapp) {
+        queueTareaNotification({
+          colleague: companero,
+          tarea: taskForm,
+          asignadoPor: user?.displayName || user?.email || "Admin",
+        }).catch(() => {})
       }
       setTaskForm({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
       setShowTaskForm(false)
@@ -121,6 +162,43 @@ export default function ColleagueDetail() {
       console.error("[Workboard] Error creando tarea:", err.code, err.message)
     }
     setSavingTask(false)
+  }
+
+  const handleFileSelected = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    if (file.size > MAX_FILE_SIZE) {
+      setUploadError("El archivo supera el límite de 15 MB.")
+      return
+    }
+    setUploadError("")
+    setUploadProgress(0)
+    try {
+      const newDoc = await uploadDocument(id, file, {
+        onProgress: setUploadProgress,
+        uploadedBy: user?.email,
+        uploadedByName: user?.displayName || user?.email,
+        proyectoNombre: uploadingForProject,
+      })
+      setDocuments(prev => [newDoc, ...prev])
+    } catch (err) {
+      console.error("[Workboard] Error subiendo documento:", err)
+      setUploadError("Error al subir el archivo. Intenta de nuevo.")
+    } finally {
+      setUploadProgress(null)
+      setUploadingForProject(null)
+    }
+  }
+
+  const handleDeleteDoc = async (docId, storagePath) => {
+    if (!window.confirm("¿Eliminar este documento? Esta acción no se puede deshacer.")) return
+    try {
+      await deleteDocument(id, docId, storagePath)
+      setDocuments(prev => prev.filter(d => d.id !== docId))
+    } catch (err) {
+      console.error("[Workboard] Error eliminando documento:", err)
+    }
   }
 
   const handleUpdateTaskStatus = async (taskId, nuevoEstado) => {
@@ -535,6 +613,7 @@ export default function ColleagueDetail() {
 
                           {proyecto.versiones?.length > 0 && (
                             <div className="flex flex-wrap gap-1.5">
+                              
                               {proyecto.versiones.map((v, vi) => {
                                 const vStyle = v.estado ? VERSION_STATE_STYLE[v.estado] : null
                                 return (
@@ -558,6 +637,80 @@ export default function ColleagueDetail() {
                         </div>
                       )}
 
+                      {/* ── Archivos del proyecto ── */}
+                      {(isAdmin || isOwn) && (() => {
+                        const proyDocs = documents.filter(d => d.proyectoNombre === proyecto.nombre)
+                        const isOpen = openDocProjects.has(proyecto.nombre)
+                        const isUploading = uploadingForProject === proyecto.nombre && uploadProgress !== null
+                        return (
+                          <div className="mt-3 pt-3 border-t border-border">
+                            <div className="flex items-center justify-between">
+                              <button
+                                onClick={() => setOpenDocProjects(prev => {
+                                  const next = new Set(prev)
+                                  isOpen ? next.delete(proyecto.nombre) : next.add(proyecto.nombre)
+                                  return next
+                                })}
+                                className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                                <span>Archivos</span>
+                                {proyDocs.length > 0 && (
+                                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                                    style={{ background: `oklch(0.60 0.14 ${pH} / 0.15)`, color: `oklch(0.60 0.14 ${pH})` }}>
+                                    {proyDocs.length}
+                                  </span>
+                                )}
+                                <span className="text-[10px] opacity-50 ml-0.5">{isOpen ? "▲" : "▼"}</span>
+                              </button>
+                              {(isAdmin || isOwn) && (
+                                <button
+                                  onClick={() => { setUploadingForProject(proyecto.nombre); fileInputRef.current?.click() }}
+                                  disabled={uploadProgress !== null}
+                                  className="text-[11px] font-semibold px-3 py-1 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
+                                  style={{ background: `oklch(0.55 0.16 ${pH})` }}>
+                                  {isUploading ? `${uploadProgress}%` : "↑ Subir"}
+                                </button>
+                              )}
+                            </div>
+                            {isUploading && (
+                              <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-2">
+                                <div className="h-full rounded-full transition-all"
+                                  style={{ width: `${uploadProgress}%`, background: `oklch(0.55 0.16 ${pH})` }} />
+                              </div>
+                            )}
+                            {uploadingForProject === proyecto.nombre && uploadError && (
+                              <p className="text-[11px] text-destructive mt-1">{uploadError}</p>
+                            )}
+                            {isOpen && (
+                              <div className="mt-2 space-y-1.5">
+                                {proyDocs.length > 0 ? proyDocs.map(documento => {
+                                  const typeInfo = getFileTypeInfo(documento.tipo, documento.nombre)
+                                  return (
+                                    <div key={documento.id}
+                                      className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors">
+                                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded flex-shrink-0"
+                                        style={{ background: typeInfo.bg, color: typeInfo.color }}>
+                                        {typeInfo.label}
+                                      </span>
+                                      <span className="text-[12px] text-foreground truncate flex-1 min-w-0">{documento.nombre}</span>
+                                      <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(documento.size)}</span>
+                                      <a href={documento.url} target="_blank" rel="noopener noreferrer"
+                                        className="text-[14px] text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+                                        title="Abrir / descargar">↓</a>
+                                      {isAdmin && (
+                                        <button onClick={() => handleDeleteDoc(documento.id, documento.storagePath)}
+                                          className="text-[12px] text-muted-foreground hover:text-destructive transition-colors flex-shrink-0"
+                                          title="Eliminar">✕</button>
+                                      )}
+                                    </div>
+                                  )
+                                }) : (
+                                  <p className="text-[11px] text-muted-foreground text-center py-2">Sin archivos subidos aún.</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </div>
                   </div>
                 )
@@ -575,8 +728,8 @@ export default function ColleagueDetail() {
         <div>
           <h2 className="text-[18px] font-bold text-foreground tracking-tight mb-4">Bitácora</h2>
 
-          {/* Formulario: solo para el dueño del perfil */}
-          {isOwn && (
+          {/* Formulario: para el dueño del perfil o el admin */}
+          {(isAdmin || isOwn) && (
             <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
               style={{ borderTopColor: `oklch(0.60 0.16 ${h})`, borderTopWidth: "3px" }}>
               <form onSubmit={handleAddLog} className="p-5">
@@ -1021,6 +1174,15 @@ export default function ColleagueDetail() {
             )}
           </div>
         )}
+
+        {/* Input oculto compartido para carga de archivos por proyecto */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.png,.jpg,.jpeg"
+          className="hidden"
+          onChange={handleFileSelected}
+        />
 
       </main>
       <Footer />

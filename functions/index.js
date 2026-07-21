@@ -1,8 +1,11 @@
 const functions = require("firebase-functions")
 const admin = require("firebase-admin")
+const { getFirestore } = require("firebase-admin/firestore")
 
 admin.initializeApp()
-const db = admin.firestore()
+// El proyecto usa la base de datos nombrada "default" (sin paréntesis),
+// no la base (default) estándar. admin.firestore() conectaría al lugar incorrecto.
+const db = getFirestore(admin.app(), "default")
 
 // API key: definida en functions/.env.desarrollo-investigaciones
 const getKey = () => process.env.WORKBOARD_API_KEY || ""
@@ -139,4 +142,90 @@ exports.pendingLogs = functions.https.onRequest(async (req, res) => {
     pendingCount: pending.length,
     weekStart: monday.toISOString().slice(0, 10),
   })
+})
+
+// ─────────────────────────────────────────────
+// GET /pendingNotifications
+// Cola de notificaciones WPP pendientes de enviar.
+// n8n hace polling cada N minutos, lee esta lista,
+// envía los mensajes de WhatsApp y luego llama /ackNotifications.
+//
+// Header: x-api-key: <clave>
+//
+// Respuesta:
+//   {
+//     "notifications": [
+//       {
+//         "id": "abc123",
+//         "tipo": "tarea_asignada",          -- o "miembro_grupo"
+//         "whatsapp": "573153542899",
+//         "nombre": "Carlos Pérez",
+//         "tarea": { "titulo": "...", "descripcion": "...", "fechaLimite": "...", "avance": 0 },
+//         "asignadoPor": "Andrea Ramírez",
+//         "createdAt": "2026-07-21T14:00:00.000Z"
+//       },
+//       {
+//         "id": "def456",
+//         "tipo": "miembro_grupo",
+//         "whatsapp": "573153542899",
+//         "nombre": "Carlos Pérez",
+//         "grupo": { "nombre": "Equipo IA", "descripcion": "..." }
+//       }
+//     ],
+//     "total": 2
+//   }
+// ─────────────────────────────────────────────
+exports.pendingNotifications = functions.https.onRequest(async (req, res) => {
+  cors(res)
+  if (req.method === "OPTIONS") return res.status(204).send("")
+  if (!auth(req)) return res.status(401).json({ error: "No autorizado" })
+
+  const snap = await db.collection("wpp_queue")
+    .where("processed", "==", false)
+    .orderBy("createdAt", "asc")
+    .limit(50)
+    .get()
+
+  const notifications = snap.docs.map(d => ({
+    id: d.id,
+    ...d.data(),
+    createdAt: d.data().createdAt?.toDate?.()?.toISOString() || null,
+  }))
+
+  return res.json({ notifications, total: notifications.length })
+})
+
+// ─────────────────────────────────────────────
+// POST /ackNotifications
+// Marca notificaciones como enviadas para no reenviarlas.
+// n8n llama este endpoint después de enviar cada mensaje.
+//
+// Header: x-api-key: <clave>
+// Body JSON:
+//   { "ids": ["abc123", "def456"] }
+//
+// Respuesta:
+//   { "ok": true, "updated": 2 }
+// ─────────────────────────────────────────────
+exports.ackNotifications = functions.https.onRequest(async (req, res) => {
+  cors(res)
+  if (req.method === "OPTIONS") return res.status(204).send("")
+  if (!auth(req)) return res.status(401).json({ error: "No autorizado" })
+  if (req.method !== "POST") return res.status(405).json({ error: "Solo POST" })
+
+  const { ids } = req.body || {}
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: "Se requiere ids: [string]" })
+  }
+
+  const batch = db.batch()
+  ids.forEach(id => {
+    batch.update(db.collection("wpp_queue").doc(id), {
+      processed: true,
+      processedAt: admin.firestore.FieldValue.serverTimestamp(),
+    })
+  })
+  await batch.commit()
+
+  return res.json({ ok: true, updated: ids.length })
 })

@@ -46,6 +46,13 @@ service cloud.firestore {
         allow create, delete: if isAdmin();
         allow update: if isAdmin() || isColleagueOwner(docId);
       }
+
+      // Documentos: dueño y admin suben, admin elimina, dueño y admin leen
+      match /documentos/{documentId} {
+        allow read: if request.auth != null && (isAdmin() || isColleagueOwner(docId));
+        allow create: if isAdmin() || isColleagueOwner(docId);
+        allow delete: if isAdmin();
+      }
     }
 
     // ── Bitácora (logs) ─────────────────────────────────────────
@@ -60,6 +67,12 @@ service cloud.firestore {
     match /notificaciones/{notifId} {
       allow read: if isAdmin();
       allow create: if request.auth != null;
+    }
+
+    // ── Cola de notificaciones WhatsApp ─────────────────────────
+    match /wpp_queue/{docId} {
+      allow create: if isAdmin();
+      allow read, update: if false; // solo Admin SDK vía Cloud Functions
     }
 
     // ── Equipos ─────────────────────────────────────────────────

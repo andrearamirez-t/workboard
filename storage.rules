@@ -1,0 +1,21 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email in [
+        "andrea_ramirezt@cun.edu.co",
+        "angela_bernalm@cun.edu.co",
+        "jose_forero@cun.edu.co"
+      ];
+    }
+
+    // Documentos de compañeros: autenticados suben, admin elimina
+    match /documentos/{colleagueId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null;
+      allow delete: if isAdmin();
+    }
+
+  }
+}

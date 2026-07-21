@@ -10,7 +10,9 @@ import { UserCircle, Search, Users, BarChart2, Plus, Pencil, Trash2, X } from "l
 import { NotificationBell } from "@/components/ui/NotificationBell"
 import { Tutorial, resetTutorial } from "@/components/ui/Tutorial"
 import { MetricsDashboard } from "@/components/ui/MetricsDashboard"
+import { TeamDashboard } from "@/components/ui/TeamDashboard"
 import { getEquipos, createEquipo, updateEquipo, deleteEquipo } from "@/services/equipos.service"
+import { queueGrupoNotification } from "@/services/wpp.service"
 
 const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
@@ -29,7 +31,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState("")
   const [hoveredId, setHoveredId] = useState(null)
   const [showTutorial, setShowTutorial] = useState(false)
-  const [tab, setTab] = useState("equipo") // "equipo" | "equipos" | "metricas"
+  const [tab, setTab] = useState("equipo") // "resumen" | "equipo" | "equipos" | "metricas"
   const [logs, setLogs] = useState([])
   // Equipos state
   const [equipos, setEquipos] = useState([])
@@ -88,7 +90,12 @@ export default function Dashboard() {
     const updatedUids = uid
       ? (adding ? [...memberUids, uid] : memberUids.filter(u => u !== uid))
       : memberUids
-    try { await updateEquipo(equipoId, { miembros: updatedMiembros, memberUids: updatedUids }) } catch (e) { console.error(e) }
+    try {
+      await updateEquipo(equipoId, { miembros: updatedMiembros, memberUids: updatedUids })
+      if (adding && colleague?.whatsapp) {
+        queueGrupoNotification({ colleague, grupo: eq }).catch(() => {})
+      }
+    } catch (e) { console.error(e) }
     reloadEquipos().catch(() => {})
   }
 
@@ -153,47 +160,53 @@ export default function Dashboard() {
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
           <div>
             <h2 className="text-[30px] font-bold tracking-tight text-foreground leading-none">
-              {tab === "equipo" ? "Mi equipo" : tab === "equipos" ? "Grupos" : "Análisis & Reportes"}
+              {tab === "resumen" ? "Resumen del equipo" : tab === "equipo" ? "Mi equipo" : tab === "equipos" ? "Grupos" : "Análisis & Reportes"}
             </h2>
             <p className="text-[13px] text-muted-foreground mt-1.5">
               Investigación e innovación · {colleagues.length} persona{colleagues.length !== 1 ? "s" : ""}
             </p>
           </div>
-          {isAdmin && (
-            <div className="flex items-center gap-2 flex-wrap">
-              {tab === "equipo" && (
-                <Button size="sm" className="h-8 text-[13px]" onClick={() => navigate("/colleague/new")}>
-                  + Compañero
-                </Button>
-              )}
-              {tab === "equipos" && (
-                <Button size="sm" className="h-8 text-[13px]"
-                  onClick={() => { setEditingEquipo(null); setEquipoForm({ nombre: "", descripcion: "", color: "295" }); setShowEquipoForm(true) }}>
-                  <Plus size={13} className="mr-1" /> Nuevo grupo
-                </Button>
-              )}
-            </div>
-          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            {isAdmin && tab === "equipo" && (
+              <Button size="sm" className="h-8 text-[13px]" onClick={() => navigate("/colleague/new")}>
+                + Compañero
+              </Button>
+            )}
+            {tab === "equipos" && (
+              <Button size="sm" className="h-8 text-[13px]"
+                onClick={() => { setEditingEquipo(null); setEquipoForm({ nombre: "", descripcion: "", color: "295" }); setShowEquipoForm(true) }}>
+                <Plus size={13} className="mr-1" /> Nuevo grupo
+              </Button>
+            )}
+          </div>
         </div>
 
-        {/* ── Tabs (admin) ── */}
-        {isAdmin && (
-          <div className="flex gap-1 mb-6 border-b border-border">
-            {[
-              { key: "equipo", label: "Mi equipo", icon: <UserCircle size={14} /> },
-              { key: "equipos", label: "Grupos", icon: <Users size={14} /> },
+        {/* ── Tabs ── */}
+        <div className="flex gap-1 mb-6 border-b border-border">
+          {[
+            ...(isAdmin ? [
+              { key: "resumen", label: "Resumen", icon: <BarChart2 size={14} /> },
+            ] : []),
+            { key: "equipo", label: "Mi equipo", icon: <UserCircle size={14} /> },
+            { key: "equipos", label: "Grupos", icon: <Users size={14} /> },
+            ...(isAdmin ? [
               { key: "metricas", label: "Análisis", icon: <BarChart2 size={14} /> },
-            ].map(t => (
-              <button key={t.key} onClick={() => setTab(t.key)}
-                className="flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-all border-b-2 -mb-px"
-                style={{
-                  borderColor: tab === t.key ? "oklch(0.62 0.22 295)" : "transparent",
-                  color: tab === t.key ? "oklch(0.62 0.22 295)" : "var(--muted-foreground)",
-                }}>
-                {t.icon}{t.label}
-              </button>
-            ))}
-          </div>
+            ] : []),
+          ].map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className="flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-all border-b-2 -mb-px"
+              style={{
+                borderColor: tab === t.key ? "oklch(0.62 0.22 295)" : "transparent",
+                color: tab === t.key ? "oklch(0.62 0.22 295)" : "var(--muted-foreground)",
+              }}>
+              {t.icon}{t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ══ TAB: RESUMEN (solo admin) ═══════════════════════════════════ */}
+        {isAdmin && tab === "resumen" && (
+          <TeamDashboard colleagues={colleagues} logs={logs} />
         )}
 
         {/* ══ TAB: MI EQUIPO ══════════════════════════════════════════════ */}
