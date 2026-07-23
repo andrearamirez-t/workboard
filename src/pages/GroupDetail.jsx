@@ -251,6 +251,11 @@ export default function GroupDetail() {
     setGrupo(prev => ({ ...prev, proyectos: (prev.proyectos || []).filter(p => p !== proyecto) }))
   }
 
+  const handleReturnProject = async (proyecto) => {
+    await deleteGrupoProject(id, proyecto)
+    setGrupo(prev => ({ ...prev, proyectos: (prev.proyectos || []).filter(p => p !== proyecto) }))
+  }
+
   const openEditProject = (p) => {
     setEditingProject(p)
     setProjectForm({ ...p, herramientas: (p.herramientas || []).join(", ") })
@@ -710,7 +715,16 @@ export default function GroupDetail() {
                             </div>
                           </div>
                           {(isAdmin || isMember) && (
-                            <div className="flex gap-2 flex-shrink-0">
+                            <div className="flex gap-2 flex-shrink-0 items-center">
+                              {isAdmin && p.enrutadoDe && (
+                                <button
+                                  onClick={() => handleReturnProject(p)}
+                                  title="Devolver al perfil individual"
+                                  className="text-[11px] font-medium px-2 py-0.5 rounded-md transition-colors"
+                                  style={{ color: "oklch(0.55 0.16 145)", background: "oklch(0.55 0.16 145 / 0.10)" }}>
+                                  ← Individual
+                                </button>
+                              )}
                               <button onClick={() => openEditProject(p)} className="text-muted-foreground hover:text-foreground transition-colors">
                                 <Pencil size={13} />
                               </button>

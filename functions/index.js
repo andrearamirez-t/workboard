@@ -1,11 +1,11 @@
 const functions = require("firebase-functions")
-const admin = require("firebase-admin")
-const { getFirestore } = require("firebase-admin/firestore")
+const { initializeApp } = require("firebase-admin/app")
+const { getFirestore, FieldValue } = require("firebase-admin/firestore")
 
-admin.initializeApp()
+const app = initializeApp()
 // El proyecto usa la base de datos nombrada "default" (sin paréntesis),
-// no la base (default) estándar. admin.firestore() conectaría al lugar incorrecto.
-const db = getFirestore(admin.app(), "default")
+// no la base (default) estándar. getFirestore() sin ID conectaría al lugar incorrecto.
+const db = getFirestore(app, "default")
 
 // API key: definida en functions/.env.desarrollo-investigaciones
 const getKey = () => process.env.WORKBOARD_API_KEY || ""
@@ -44,36 +44,48 @@ exports.addLog = functions.https.onRequest(async (req, res) => {
     return res.status(400).json({ error: "Se requieren (email o whatsapp) y nota en el body" })
   }
 
-  // Identificar compañero por whatsapp primero, luego por email
-  let snap
-  if (whatsapp) {
-    const num = String(whatsapp).replace(/\D/g, "")
-    snap = await db.collection("companeros").where("whatsapp", "==", num).limit(1).get()
-    if (snap.empty) {
-      return res.status(404).json({ error: `No se encontró ningún compañero con WhatsApp: ${num}` })
+  try {
+    // Identificar compañero por whatsapp primero, luego por email
+    let snap
+    if (whatsapp) {
+      const num = String(whatsapp).replace(/\D/g, "")
+      snap = await db.collection("companeros").where("whatsapp", "==", num).limit(1).get()
+      if (snap.empty) {
+        return res.status(404).json({ error: `No se encontró ningún compañero con WhatsApp: ${num}` })
+      }
+    } else {
+      snap = await db.collection("companeros")
+        .where("email", "==", email.trim().toLowerCase())
+        .limit(1)
+        .get()
+      if (snap.empty) {
+        return res.status(404).json({ error: `No se encontró ningún compañero con email: ${email}` })
+      }
     }
-  } else {
-    snap = await db.collection("companeros")
-      .where("email", "==", email.trim().toLowerCase())
-      .limit(1)
-      .get()
-    if (snap.empty) {
-      return res.status(404).json({ error: `No se encontró ningún compañero con email: ${email}` })
-    }
+
+    const companeroDoc = snap.docs[0]
+    const companero = companeroDoc.data()
+
+    const logRef = await db.collection("logs").add({
+      colleagueId: companeroDoc.id,
+      colleagueName: companero.nombre,
+      nota: nota.trim(),
+      creadoPor: "whatsapp-bot",
+      createdAt: FieldValue.serverTimestamp(),
+    })
+
+    return res.json({ ok: true, logId: logRef.id, colleague: companero.nombre })
+  } catch (err) {
+    console.error("[addLog] Error interno:", err.code, err.message)
+    const isPermission = err.code === 7 || err.message?.includes("PERMISSION_DENIED")
+    return res.status(500).json({
+      error: "Error interno del servidor",
+      causa: isPermission
+        ? "El servicio no tiene permisos sobre la base de datos Firestore. Contactar a andrea_ramirezt@cun.edu.co — se requiere otorgar el rol 'Cloud Datastore User' al service account de Cloud Functions."
+        : err.message,
+      code: err.code || null,
+    })
   }
-
-  const companeroDoc = snap.docs[0]
-  const companero = companeroDoc.data()
-
-  const logRef = await db.collection("logs").add({
-    colleagueId: companeroDoc.id,
-    colleagueName: companero.nombre,
-    nota: nota.trim(),
-    creadoPor: "whatsapp-bot",
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  })
-
-  return res.json({ ok: true, logId: logRef.id, colleague: companero.nombre })
 })
 
 // ─────────────────────────────────────────────
@@ -222,7 +234,7 @@ exports.ackNotifications = functions.https.onRequest(async (req, res) => {
   ids.forEach(id => {
     batch.update(db.collection("wpp_queue").doc(id), {
       processed: true,
-      processedAt: admin.firestore.FieldValue.serverTimestamp(),
+      processedAt: FieldValue.serverTimestamp(),
     })
   })
   await batch.commit()

@@ -13,6 +13,7 @@ import { MetricsDashboard } from "@/components/ui/MetricsDashboard"
 import { TeamDashboard } from "@/components/ui/TeamDashboard"
 import { getEquipos, createEquipo, updateEquipo, deleteEquipo } from "@/services/equipos.service"
 import { queueGrupoNotification } from "@/services/wpp.service"
+import { crearNotificacionUsuario } from "@/services/notificaciones.service"
 
 const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
@@ -100,6 +101,15 @@ export default function Dashboard() {
       await updateEquipo(equipoId, { miembros: updatedMiembros, memberUids: updatedUids })
       if (adding && colleague?.whatsapp) {
         queueGrupoNotification({ colleague, grupo: eq }).catch(() => {})
+      }
+      if (adding && uid) {
+        crearNotificacionUsuario({
+          toUid: uid,
+          tipo: "invitado_grupo",
+          titulo: "Te han invitado a un grupo",
+          subtitulo: eq.nombre,
+          path: `/grupo/${equipoId}`,
+        }).catch(() => {})
       }
     } catch (e) { console.error(e) }
     reloadEquipos().catch(() => {})

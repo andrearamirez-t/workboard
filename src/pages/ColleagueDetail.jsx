@@ -367,8 +367,7 @@ export default function ColleagueDetail() {
     if (!grupoSeleccionado || !enrutandoProyecto) return
     setSavingEnrute(true)
     try {
-      await addGrupoProject(grupoSeleccionado, enrutandoProyecto)
-      await deleteProject(id, enrutandoProyecto)
+      await addGrupoProject(grupoSeleccionado, { ...enrutandoProyecto, enrutadoDe: id })
       setEnrutandoProyecto(null)
       setGrupoSeleccionado("")
       loadData()

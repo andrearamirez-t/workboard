@@ -32,6 +32,7 @@ export function AuthProvider({ children }) {
             if (snap.exists()) {
               setMyColleagueId(cached)
               setLoading(false)
+              if (!snap.data()?.uid) linkColleagueUid(cached, currentUser.uid).catch(() => {})
               return
             }
             // Caché inválido (doc eliminado), limpiar
