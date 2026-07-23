@@ -119,6 +119,11 @@ export default function ColleagueDetail() {
   const [solicitudMotivo, setSolicitudMotivo] = useState("")
   const [solicitudFecha, setSolicitudFecha] = useState("")
   const [savingSolicitud, setSavingSolicitud] = useState(false)
+  const [taskAvanceLocal, setTaskAvanceLocal] = useState({})
+  const [savingAvance, setSavingAvance] = useState(null)
+  const [openTaskFiles, setOpenTaskFiles] = useState(new Set())
+  const [taskFileProgress, setTaskFileProgress] = useState(null)
+  const [taskFileError, setTaskFileError] = useState("")
 
   const [documents, setDocuments] = useState([])
   const [uploadProgress, setUploadProgress] = useState(null)
@@ -126,6 +131,8 @@ export default function ColleagueDetail() {
   const [uploadingForProject, setUploadingForProject] = useState(null)
   const [openDocProjects, setOpenDocProjects] = useState(new Set())
   const fileInputRef = useRef(null)
+  const taskFileInputRef = useRef(null)
+  const uploadingTaskIdRef = useRef(null)
 
   const loadData = async () => {
     const snap = await getDoc(doc(db, "companeros", id))
@@ -226,7 +233,7 @@ export default function ColleagueDetail() {
     try {
       await updateTaskStatus(id, taskId, nuevoEstado)
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, estado: nuevoEstado } : t))
-      if (nuevoEstado === "Hecho") {
+      if (nuevoEstado === "Hecha") {
         const task = tasks.find(t => t.id === taskId)
         notificarTareaCompletada({
           taskTitle: task?.titulo,
@@ -290,6 +297,57 @@ export default function ColleagueDetail() {
       console.error("[Workboard] Error solicitando plazo:", err.code, err.message)
     } finally {
       setSavingSolicitud(false)
+    }
+  }
+
+  const handleUpdateAvance = async (taskId, newAvance) => {
+    setSavingAvance(taskId)
+    try {
+      const task = tasks.find(t => t.id === taskId)
+      const nuevoEstado = newAvance >= 100 ? "Hecha" : undefined
+      await updateTaskAvance(id, taskId, newAvance, nuevoEstado)
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, avance: newAvance, ...(nuevoEstado ? { estado: nuevoEstado } : {}) } : t))
+      if (newAvance >= 100 && task?.estado !== "Hecha") {
+        notificarTareaCompletada({ taskTitle: task?.titulo, assigneeName: companero?.nombre || id, path: `/colleague/${id}` }).catch(() => {})
+      }
+    } catch (err) {
+      console.error("[Workboard] Error actualizando avance:", err)
+    } finally {
+      setSavingAvance(null)
+      setTaskAvanceLocal(prev => { const n = { ...prev }; delete n[taskId]; return n })
+    }
+  }
+
+  const handleTaskFileSelected = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    const taskId = uploadingTaskIdRef.current
+    if (!taskId) return
+    if (file.size > MAX_FILE_SIZE) { setTaskFileError("El archivo supera 15 MB."); return }
+    setTaskFileError("")
+    setTaskFileProgress({ taskId, progress: 0 })
+    try {
+      const archivo = await uploadTaskFile(id, taskId, file, { onProgress: p => setTaskFileProgress({ taskId, progress: p }) })
+      await addTaskFile(id, taskId, archivo)
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, archivos: [...(t.archivos || []), archivo] } : t))
+    } catch (err) {
+      console.error("[Workboard] Error subiendo archivo de tarea:", err)
+      setTaskFileError("Error al subir el archivo.")
+    } finally {
+      setTaskFileProgress(null)
+      uploadingTaskIdRef.current = null
+    }
+  }
+
+  const handleDeleteTaskFile = async (taskId, archivo) => {
+    if (!window.confirm(`¿Eliminar "${archivo.nombre}"?`)) return
+    try {
+      await deleteTaskFile(archivo.storagePath)
+      await removeTaskFile(id, taskId, archivo)
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, archivos: (t.archivos || []).filter(a => a.storagePath !== archivo.storagePath) } : t))
+    } catch (err) {
+      console.error("[Workboard] Error eliminando archivo de tarea:", err)
     }
   }
 
@@ -368,6 +426,15 @@ export default function ColleagueDetail() {
     if (!feedbackText.trim()) return
     setSavingFeedback(true)
     await addFeedback(id, feedbackText.trim(), user)
+    if (companero?.uid) {
+      crearNotificacionUsuario({
+        toUid: companero.uid,
+        tipo: "feedback_recibido",
+        titulo: "Tienes nueva retroalimentación",
+        subtitulo: feedbackText.trim().slice(0, 80),
+        path: `/colleague/${id}`,
+      }).catch(() => {})
+    }
     setFeedbackText("")
     setFeedback(await getFeedback(id))
     setSavingFeedback(false)
@@ -578,8 +645,8 @@ export default function ColleagueDetail() {
                             )}
                           </div>
                           {proyecto.area && (
-                            <span className="inline-block text-[11px] font-medium px-2 py-0.5 rounded-full mt-1.5"
-                              style={{ backgroundColor: `oklch(0.34 0.06 ${pH} / 0.15)`, color: `oklch(0.85 0.10 ${pH})` }}>
+                            <span className="inline-block text-[11px] font-semibold px-2 py-0.5 rounded-full mt-1.5"
+                              style={{ backgroundColor: `oklch(0.58 0.12 ${pH} / 0.18)`, color: `oklch(0.58 0.16 ${pH})` }}>
                               {proyecto.area}
                             </span>
                           )}
@@ -588,55 +655,58 @@ export default function ColleagueDetail() {
                           <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                             <button
                               onClick={() => navigate(`/colleague/${id}/project/new`, { state: { editProject: proyecto } })}
-                              className="text-[12px] font-medium hover:opacity-70 transition-opacity"
-                              style={{ color: `oklch(0.62 0.14 ${pH})` }}>
+                              className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
+                              style={{ color: `oklch(0.42 0.16 ${pH})` }}>
                               Editar
                             </button>
                             {grupos.length > 0 && (
                               <button
                                 onClick={() => { setEnrutandoProyecto(proyecto); setGrupoSeleccionado("") }}
-                                className="text-[12px] font-medium hover:opacity-70 transition-opacity"
-                                style={{ color: `oklch(0.62 0.16 145)` }}>
+                                className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
+                                style={{ color: "oklch(0.38 0.18 145)" }}>
                                 → Grupo
                               </button>
                             )}
                             <button onClick={() => handleDeleteProject(proyecto)}
-                              className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
+                              className="text-[12px] font-semibold text-destructive hover:opacity-70 transition-opacity">
                               Eliminar
                             </button>
                           </div>
                         )}
-
-                        {/* Selector de grupo para enrutar */}
-                        {enrutandoProyecto?.nombre === proyecto.nombre && enrutandoProyecto?.fechaInicio === proyecto.fechaInicio && (
-                          <div className="mt-3 p-3 rounded-xl border border-border bg-muted/30 space-y-2 w-full">
-                            <p className="text-[12px] font-semibold text-foreground">Mover proyecto al grupo:</p>
-                            <select
-                              value={grupoSeleccionado}
-                              onChange={e => setGrupoSeleccionado(e.target.value)}
-                              className="w-full bg-background border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40">
-                              <option value="">Selecciona un grupo…</option>
-                              {grupos.map(g => (
-                                <option key={g.id} value={g.id}>{g.nombre}</option>
-                              ))}
-                            </select>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={handleEnrutarProyecto}
-                                disabled={!grupoSeleccionado || savingEnrute}
-                                className="h-7 px-3 rounded-lg text-[11px] font-bold text-white disabled:opacity-50 transition-opacity"
-                                style={{ background: "oklch(0.58 0.18 145)" }}>
-                                {savingEnrute ? "Moviendo…" : "Confirmar"}
-                              </button>
-                              <button
-                                onClick={() => { setEnrutandoProyecto(null); setGrupoSeleccionado("") }}
-                                className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground transition-colors">
-                                Cancelar
-                              </button>
-                            </div>
-                          </div>
-                        )}
                       </div>
+
+                      {/* Enrutar proyecto a grupo — panel separado debajo del encabezado */}
+                      {enrutandoProyecto?.nombre === proyecto.nombre && enrutandoProyecto?.fechaInicio === proyecto.fechaInicio && (
+                        <div className="mb-4 p-4 rounded-xl space-y-3"
+                          style={{ background: `oklch(0.60 0.16 145 / 0.08)`, border: `1px solid oklch(0.55 0.16 145 / 0.35)` }}>
+                          <p className="text-[13px] font-bold" style={{ color: "oklch(0.40 0.16 145)" }}>
+                            Mover proyecto al grupo
+                          </p>
+                          <select
+                            value={grupoSeleccionado}
+                            onChange={e => setGrupoSeleccionado(e.target.value)}
+                            className="w-full bg-background border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40">
+                            <option value="">Selecciona un grupo…</option>
+                            {grupos.map(g => (
+                              <option key={g.id} value={g.id}>{g.nombre}</option>
+                            ))}
+                          </select>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={handleEnrutarProyecto}
+                              disabled={!grupoSeleccionado || savingEnrute}
+                              className="h-8 px-4 rounded-lg text-[12px] font-bold text-white disabled:opacity-50 transition-opacity hover:opacity-90"
+                              style={{ background: "oklch(0.52 0.18 145)" }}>
+                              {savingEnrute ? "Moviendo…" : "Confirmar"}
+                            </button>
+                            <button
+                              onClick={() => { setEnrutandoProyecto(null); setGrupoSeleccionado("") }}
+                              className="h-8 px-4 rounded-lg text-[12px] font-semibold border border-border text-foreground hover:bg-muted transition-colors">
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Avance — solo admin y dueño */}
                       {(isOwn || isAdmin) && (
@@ -674,8 +744,8 @@ export default function ColleagueDetail() {
                       {proyecto.herramientas?.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mb-2.5">
                           {proyecto.herramientas.map(tool => (
-                            <span key={tool} className="text-[11px] px-2.5 py-0.5 rounded-lg font-medium"
-                              style={{ backgroundColor: `oklch(0.34 0.04 ${pH} / 0.15)`, color: `oklch(0.80 0.08 ${pH})` }}>
+                            <span key={tool} className="text-[11px] px-2.5 py-0.5 rounded-lg font-semibold"
+                              style={{ backgroundColor: `oklch(0.58 0.10 ${pH} / 0.16)`, color: `oklch(0.58 0.13 ${pH})` }}>
                               {tool}
                             </span>
                           ))}
@@ -729,7 +799,7 @@ export default function ColleagueDetail() {
                                   <span key={vi}
                                     className="text-[11px] px-2.5 py-1 rounded-lg border border-border text-muted-foreground flex items-center gap-1.5"
                                     style={vStyle ? { borderColor: vStyle.color + "44", backgroundColor: vStyle.bg } : {}}>
-                                    <span className="font-semibold" style={{ color: vStyle ? vStyle.color : `oklch(0.70 0.12 ${pH})` }}>
+                                    <span className="font-semibold" style={{ color: vStyle ? vStyle.color : `oklch(0.60 0.14 ${pH})` }}>
                                       {v.nombre}
                                     </span>
                                     {v.fecha && (
@@ -922,8 +992,8 @@ export default function ColleagueDetail() {
                           {(isOwn || log.creadoPor === user?.uid || isAdmin) && (
                             <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button onClick={() => handleStartEditLog(log)}
-                                className="text-[12px] font-medium hover:opacity-70 transition-opacity"
-                                style={{ color: `oklch(0.62 0.14 ${h})` }}>
+                                className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
+                                style={{ color: `oklch(0.42 0.16 ${h})` }}>
                                 Editar
                               </button>
                               <button onClick={() => handleDeleteLog(log.id)}
@@ -1034,8 +1104,8 @@ export default function ColleagueDetail() {
                           <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
                               onClick={() => { setEditingFbId(fb.id); setEditingFbText(fb.texto) }}
-                              className="text-[12px] font-medium hover:opacity-70 transition-opacity"
-                              style={{ color: "oklch(0.60 0.14 55)" }}>
+                              className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
+                              style={{ color: "oklch(0.40 0.16 55)" }}>
                               Editar
                             </button>
                             <button onClick={() => handleDeleteFeedback(fb.id)}
@@ -1300,8 +1370,36 @@ export default function ColleagueDetail() {
                             {task.descripcion && (
                               <p className="text-[12.5px] text-muted-foreground mt-1 leading-relaxed">{task.descripcion}</p>
                             )}
-                            {/* Barra de avance */}
-                            {(task.avance != null && task.avance > 0) && (
+                            {/* Avance — slider interactivo para el dueño no-admin, barra de solo lectura para el resto */}
+                            {isOwn && !isAdmin && task.estado !== "Hecha" ? (
+                              <div className="mt-2">
+                                <div className="flex justify-between text-[10px] mb-1">
+                                  <span className="text-muted-foreground font-medium">Avance</span>
+                                  <span className="font-bold tabular-nums" style={{ color: (taskAvanceLocal[task.id] ?? task.avance ?? 0) >= 100 ? "oklch(0.55 0.18 145)" : (taskAvanceLocal[task.id] ?? task.avance ?? 0) >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }}>
+                                    {taskAvanceLocal[task.id] ?? task.avance ?? 0}%
+                                  </span>
+                                </div>
+                                <input type="range" min="0" max="100" step="5"
+                                  value={taskAvanceLocal[task.id] ?? task.avance ?? 0}
+                                  onChange={e => setTaskAvanceLocal(prev => ({ ...prev, [task.id]: Number(e.target.value) }))}
+                                  disabled={savingAvance === task.id}
+                                  className="w-full accent-primary disabled:opacity-50" />
+                                {taskAvanceLocal[task.id] != null && taskAvanceLocal[task.id] !== (task.avance ?? 0) && (
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <button onClick={() => handleUpdateAvance(task.id, taskAvanceLocal[task.id])}
+                                      disabled={savingAvance === task.id}
+                                      className="text-[10px] font-bold px-2.5 py-1 rounded-lg text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.55 0.18 260)" }}>
+                                      {savingAvance === task.id ? "Guardando…" : "Guardar avance"}
+                                    </button>
+                                    <button onClick={() => setTaskAvanceLocal(prev => { const n = { ...prev }; delete n[task.id]; return n })}
+                                      className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">
+                                      Descartar
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (task.avance != null && task.avance > 0) && (
                               <div className="mt-2">
                                 <div className="flex justify-between text-[10px] mb-0.5">
                                   <span className="text-muted-foreground">Avance</span>
@@ -1355,6 +1453,65 @@ export default function ColleagueDetail() {
                                 ⏰ Solicitud de más tiempo enviada
                               </p>
                             )}
+
+                            {/* Archivos adjuntos de la tarea */}
+                            {(isOwn || isAdmin) && (
+                              <div className="mt-2 pt-2 border-t border-border">
+                                <div className="flex items-center justify-between">
+                                  <button
+                                    onClick={() => setOpenTaskFiles(prev => { const s = new Set(prev); s.has(task.id) ? s.delete(task.id) : s.add(task.id); return s })}
+                                    className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                                    <span>Archivos</span>
+                                    {(task.archivos?.length > 0) && (
+                                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                                        style={{ background: "oklch(0.60 0.18 260 / 0.15)", color: "oklch(0.55 0.18 260)" }}>
+                                        {task.archivos.length}
+                                      </span>
+                                    )}
+                                    <span className="text-[9px] opacity-40">{openTaskFiles.has(task.id) ? "▲" : "▼"}</span>
+                                  </button>
+                                  <button
+                                    onClick={() => { uploadingTaskIdRef.current = task.id; taskFileInputRef.current?.click() }}
+                                    disabled={taskFileProgress !== null}
+                                    className="text-[10px] font-bold px-2.5 py-1 rounded-lg text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
+                                    style={{ background: "oklch(0.55 0.18 260)" }}>
+                                    {taskFileProgress?.taskId === task.id ? `${taskFileProgress.progress}%` : "↑ Subir"}
+                                  </button>
+                                </div>
+                                {taskFileProgress?.taskId === task.id && (
+                                  <div className="h-1 rounded-full bg-muted overflow-hidden mt-1.5">
+                                    <div className="h-full rounded-full transition-all"
+                                      style={{ width: `${taskFileProgress.progress}%`, background: "oklch(0.55 0.18 260)" }} />
+                                  </div>
+                                )}
+                                {taskFileError && taskFileProgress === null && (
+                                  <p className="text-[10px] text-destructive mt-1">{taskFileError}</p>
+                                )}
+                                {openTaskFiles.has(task.id) && (
+                                  <div className="mt-1.5 space-y-1">
+                                    {!task.archivos?.length ? (
+                                      <p className="text-[10px] text-muted-foreground italic py-1">Sin archivos adjuntos.</p>
+                                    ) : task.archivos.map((arch, ai) => {
+                                      const fi = getFileTypeInfo(arch.tipo, arch.nombre)
+                                      return (
+                                        <div key={ai} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors">
+                                          <span className="text-[9px] font-black px-1.5 py-0.5 rounded flex-shrink-0"
+                                            style={{ background: fi.bg, color: fi.color }}>{fi.label}</span>
+                                          <span className="text-[11px] text-foreground truncate flex-1 min-w-0">{arch.nombre}</span>
+                                          {arch.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(arch.size)}</span>}
+                                          <a href={arch.url} target="_blank" rel="noopener noreferrer"
+                                            className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</a>
+                                          {(isAdmin || isOwn) && (
+                                            <button onClick={() => handleDeleteTaskFile(task.id, arch)}
+                                              className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">✕</button>
+                                          )}
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
@@ -1372,14 +1529,14 @@ export default function ColleagueDetail() {
           </div>
         )}
 
-        {/* Input oculto compartido para carga de archivos por proyecto */}
-        <input
-          ref={fileInputRef}
-          type="file"
+        {/* Input oculto para carga de archivos por proyecto */}
+        <input ref={fileInputRef} type="file"
           accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.png,.jpg,.jpeg"
-          className="hidden"
-          onChange={handleFileSelected}
-        />
+          className="hidden" onChange={handleFileSelected} />
+        {/* Input oculto para archivos de tareas */}
+        <input ref={taskFileInputRef} type="file"
+          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
+          className="hidden" onChange={handleTaskFileSelected} />
 
       </main>
       <Footer />

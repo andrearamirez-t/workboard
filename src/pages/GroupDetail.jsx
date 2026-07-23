@@ -10,13 +10,13 @@ import EmojiPicker from "emoji-picker-react"
 import {
   getGrupo, addGrupoProject, deleteGrupoProject, updateGrupoProject,
   addGrupoLog, getGrupoLogs, deleteGrupoLog, updateGrupoLog,
-  addGrupoTask, getGrupoTasks, updateGrupoTask, updateGrupoTaskStatus, deleteGrupoTask,
+  addGrupoTask, getGrupoTasks, updateGrupoTask, updateGrupoTaskStatus, deleteGrupoTask, updateGrupoTaskAvance,
   addGrupoFeedback, getGrupoFeedback, deleteGrupoFeedback, updateGrupoFeedback,
-  solicitarPlazoGrupoTask,
+  solicitarPlazoGrupoTask, addGrupoTaskFile, removeGrupoTaskFile,
 } from "@/services/groups.service"
 import { notificarTareaCompletada, crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { getColleagues } from "@/services/colleagues.service"
-import { uploadGroupDocument, getGroupDocuments, deleteGroupDocument, MAX_FILE_SIZE } from "@/services/storage.service"
+import { uploadGroupDocument, getGroupDocuments, deleteGroupDocument, uploadGrupoTaskFile, deleteTaskFile, MAX_FILE_SIZE } from "@/services/storage.service"
 import { Pencil, Trash2, Check, X, Plus, ChevronDown, ChevronUp } from "lucide-react"
 
 function getFileTypeInfo(tipo, nombre) {
@@ -86,6 +86,8 @@ export default function GroupDetail() {
   // Documentos
   const fileInputRef = useRef(null)
   const uploadingProjectRef = useRef(null) // ref para evitar stale closure
+  const taskFileInputRef = useRef(null)
+  const uploadingTaskIdRef = useRef(null)
   const [groupDocuments, setGroupDocuments] = useState([])
   const [uploadProgress, setUploadProgress] = useState(null)
   const [uploadError, setUploadError] = useState("")
@@ -102,6 +104,11 @@ export default function GroupDetail() {
   const [solicitudMotivo, setSolicitudMotivo] = useState("")
   const [solicitudFecha, setSolicitudFecha] = useState("")
   const [savingSolicitud, setSavingSolicitud] = useState(false)
+  const [taskAvanceLocal, setTaskAvanceLocal] = useState({})
+  const [savingAvance, setSavingAvance] = useState(null)
+  const [openTaskFiles, setOpenTaskFiles] = useState(new Set())
+  const [taskFileProgress, setTaskFileProgress] = useState(null)
+  const [taskFileError, setTaskFileError] = useState("")
 
   // Retroalimentación
   const [feedbackText, setFeedbackText] = useState("")
@@ -224,6 +231,12 @@ export default function GroupDetail() {
         await updateGrupoProject(id, editingProject, data)
       } else {
         await addGrupoProject(id, data)
+        notificarMiembros({
+          tipo: "proyecto_grupo",
+          titulo: `Nuevo proyecto en "${grupo?.nombre}"`,
+          subtitulo: data.nombre,
+          path: `/grupo/${id}`,
+        })
       }
       const g = await getGrupo(id)
       setGrupo(g)
@@ -285,6 +298,12 @@ export default function GroupDetail() {
         grupoNombre: grupo?.nombre,
         path: `/grupo/${id}`,
       }).catch(() => {})
+      notificarMiembros({
+        tipo: "tarea_completada_grupo",
+        titulo: `Tarea completada en "${grupo?.nombre}"`,
+        subtitulo: task?.titulo,
+        path: `/grupo/${id}`,
+      })
     }
   }
 
@@ -309,10 +328,68 @@ export default function GroupDetail() {
       setSolicitudMotivo("")
       setSolicitudFecha("")
       setTasks(await getGrupoTasks(id))
+      notificarTareaCompletada({
+        tipo: "plazo_solicitado",
+        taskTitle: `Solicitud de plazo en "${grupo?.nombre}"`,
+        assigneeName: yo?.nombre || user?.displayName || user?.email,
+        path: `/grupo/${id}`,
+      }).catch(() => {})
     } catch (err) {
       console.error("[Workboard] Error solicitando plazo grupo:", err)
     } finally {
       setSavingSolicitud(false)
+    }
+  }
+
+  const handleUpdateAvance = async (taskId, newAvance) => {
+    setSavingAvance(taskId)
+    try {
+      const task = tasks.find(t => t.id === taskId)
+      const nuevoEstado = newAvance >= 100 ? "Hecho" : undefined
+      await updateGrupoTaskAvance(id, taskId, newAvance, nuevoEstado)
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, avance: newAvance, ...(nuevoEstado ? { estado: nuevoEstado } : {}) } : t))
+      if (newAvance >= 100 && task?.estado !== "Hecho") {
+        notificarTareaCompletada({ taskTitle: task?.titulo, grupoNombre: grupo?.nombre, path: `/grupo/${id}` }).catch(() => {})
+        notificarMiembros({ tipo: "tarea_completada_grupo", titulo: `Tarea completada en "${grupo?.nombre}"`, subtitulo: task?.titulo, path: `/grupo/${id}` })
+      }
+    } catch (err) {
+      console.error("[Workboard] Error actualizando avance de tarea:", err)
+    } finally {
+      setSavingAvance(null)
+      setTaskAvanceLocal(prev => { const n = { ...prev }; delete n[taskId]; return n })
+    }
+  }
+
+  const handleGroupTaskFileSelected = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    const taskId = uploadingTaskIdRef.current
+    if (!taskId) return
+    if (file.size > MAX_FILE_SIZE) { setTaskFileError("El archivo supera 15 MB."); return }
+    setTaskFileError("")
+    setTaskFileProgress({ taskId, progress: 0 })
+    try {
+      const archivo = await uploadGrupoTaskFile(id, taskId, file, { onProgress: p => setTaskFileProgress({ taskId, progress: p }) })
+      await addGrupoTaskFile(id, taskId, archivo)
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, archivos: [...(t.archivos || []), archivo] } : t))
+    } catch (err) {
+      console.error("[Workboard] Error subiendo archivo de tarea:", err)
+      setTaskFileError("Error al subir el archivo.")
+    } finally {
+      setTaskFileProgress(null)
+      uploadingTaskIdRef.current = null
+    }
+  }
+
+  const handleDeleteGroupTaskFile = async (taskId, archivo) => {
+    if (!window.confirm(`¿Eliminar "${archivo.nombre}"?`)) return
+    try {
+      await deleteTaskFile(archivo.storagePath)
+      await removeGrupoTaskFile(id, taskId, archivo)
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, archivos: (t.archivos || []).filter(a => a.storagePath !== archivo.storagePath) } : t))
+    } catch (err) {
+      console.error("[Workboard] Error eliminando archivo de tarea:", err)
     }
   }
 
@@ -953,7 +1030,36 @@ export default function GroupDetail() {
                                 {t.titulo}
                               </p>
                               {t.descripcion && <p className="text-[11px] text-muted-foreground mt-0.5">{t.descripcion}</p>}
-                              {(t.avance != null && t.avance > 0) && (
+                              {/* Avance — slider para miembros no-admin, barra para el resto */}
+                              {isMember && !isAdmin && !done ? (
+                                <div className="mt-1.5">
+                                  <div className="flex justify-between text-[10px] mb-1">
+                                    <span className="text-muted-foreground font-medium">Avance</span>
+                                    <span className="font-bold tabular-nums" style={{ color: (taskAvanceLocal[t.id] ?? t.avance ?? 0) >= 100 ? "oklch(0.55 0.18 145)" : (taskAvanceLocal[t.id] ?? t.avance ?? 0) >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }}>
+                                      {taskAvanceLocal[t.id] ?? t.avance ?? 0}%
+                                    </span>
+                                  </div>
+                                  <input type="range" min="0" max="100" step="5"
+                                    value={taskAvanceLocal[t.id] ?? t.avance ?? 0}
+                                    onChange={e => setTaskAvanceLocal(prev => ({ ...prev, [t.id]: Number(e.target.value) }))}
+                                    disabled={savingAvance === t.id}
+                                    className="w-full accent-primary disabled:opacity-50" />
+                                  {taskAvanceLocal[t.id] != null && taskAvanceLocal[t.id] !== (t.avance ?? 0) && (
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <button onClick={() => handleUpdateAvance(t.id, taskAvanceLocal[t.id])}
+                                        disabled={savingAvance === t.id}
+                                        className="text-[10px] font-bold px-2.5 py-1 rounded-lg text-white disabled:opacity-50"
+                                        style={{ background: `oklch(0.52 0.22 ${hue})` }}>
+                                        {savingAvance === t.id ? "Guardando…" : "Guardar avance"}
+                                      </button>
+                                      <button onClick={() => setTaskAvanceLocal(prev => { const n = { ...prev }; delete n[t.id]; return n })}
+                                        className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">
+                                        Descartar
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (t.avance != null && t.avance > 0) && (
                                 <div className="mt-1.5">
                                   <div className="flex justify-between text-[10px] mb-0.5">
                                     <span className="text-muted-foreground">Avance</span>
@@ -992,6 +1098,62 @@ export default function GroupDetail() {
                                 <p className="text-[11px] mt-1.5 font-medium" style={{ color: "oklch(0.58 0.20 55)" }}>
                                   ⏰ Solicitud de más tiempo enviada
                                 </p>
+                              )}
+
+                              {/* Archivos adjuntos de la tarea */}
+                              {canAccess && (
+                                <div className="mt-2 pt-2 border-t border-border">
+                                  <div className="flex items-center justify-between">
+                                    <button
+                                      onClick={() => setOpenTaskFiles(prev => { const s = new Set(prev); s.has(t.id) ? s.delete(t.id) : s.add(t.id); return s })}
+                                      className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                                      <span>Archivos</span>
+                                      {(t.archivos?.length > 0) && (
+                                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                                          style={{ background: `oklch(0.62 0.22 ${hue} / 0.15)`, color: `oklch(0.52 0.22 ${hue})` }}>
+                                          {t.archivos.length}
+                                        </span>
+                                      )}
+                                      <span className="text-[9px] opacity-40">{openTaskFiles.has(t.id) ? "▲" : "▼"}</span>
+                                    </button>
+                                    <button
+                                      onClick={() => { uploadingTaskIdRef.current = t.id; taskFileInputRef.current?.click() }}
+                                      disabled={taskFileProgress !== null}
+                                      className="text-[10px] font-bold px-2.5 py-1 rounded-lg text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
+                                      style={{ background: `oklch(0.52 0.22 ${hue})` }}>
+                                      {taskFileProgress?.taskId === t.id ? `${taskFileProgress.progress}%` : "↑ Subir"}
+                                    </button>
+                                  </div>
+                                  {taskFileProgress?.taskId === t.id && (
+                                    <div className="h-1 rounded-full bg-muted overflow-hidden mt-1.5">
+                                      <div className="h-full rounded-full transition-all"
+                                        style={{ width: `${taskFileProgress.progress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
+                                    </div>
+                                  )}
+                                  {openTaskFiles.has(t.id) && (
+                                    <div className="mt-1.5 space-y-1">
+                                      {!t.archivos?.length ? (
+                                        <p className="text-[10px] text-muted-foreground italic py-1">Sin archivos adjuntos.</p>
+                                      ) : t.archivos.map((arch, ai) => {
+                                        const fi = getFileTypeInfo(arch.tipo, arch.nombre)
+                                        return (
+                                          <div key={ai} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors">
+                                            <span className="text-[9px] font-black px-1.5 py-0.5 rounded flex-shrink-0"
+                                              style={{ background: fi.bg, color: fi.color }}>{fi.label}</span>
+                                            <span className="text-[11px] text-foreground truncate flex-1 min-w-0">{arch.nombre}</span>
+                                            {arch.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(arch.size)}</span>}
+                                            <a href={arch.url} target="_blank" rel="noopener noreferrer"
+                                              className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</a>
+                                            {(isAdmin || isMember) && (
+                                              <button onClick={() => handleDeleteGroupTaskFile(t.id, arch)}
+                                                className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">✕</button>
+                                            )}
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
                               )}
 
                               {/* Botón / formulario para pedir plazo */}
@@ -1126,14 +1288,14 @@ export default function GroupDetail() {
       </main>
       <Footer />
 
-      {/* Input de archivo oculto para subir documentos de grupo */}
-      <input
-        ref={fileInputRef}
-        type="file"
+      {/* Input oculto para documentos de proyectos */}
+      <input ref={fileInputRef} type="file"
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"
-        style={{ display: "none" }}
-        onChange={handleFileSelected}
-      />
+        style={{ display: "none" }} onChange={handleFileSelected} />
+      {/* Input oculto para archivos de tareas */}
+      <input ref={taskFileInputRef} type="file"
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
+        style={{ display: "none" }} onChange={handleGroupTaskFileSelected} />
     </div>
   )
 }
