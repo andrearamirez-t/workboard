@@ -11,3 +11,15 @@ export const notificarTareaCompletada = async ({ taskTitle, assigneeName, grupoN
     createdAt: serverTimestamp(),
   })
 }
+
+// Notificación personal al compañero — visible en su campana
+export const crearNotificacionUsuario = async ({ toUid, tipo, titulo, subtitulo, path }) => {
+  if (!toUid) return null
+  return await addDoc(collection(db, "notif_usuario", toUid, "items"), {
+    tipo: tipo || "general",
+    titulo,
+    subtitulo: subtitulo || null,
+    path: path || null,
+    createdAt: serverTimestamp(),
+  })
+}

@@ -3,12 +3,13 @@ import { useParams, useNavigate } from "react-router-dom"
 import { doc, getDoc } from "firebase/firestore"
 import { db } from "@/services/firebase"
 import { deleteColleague, deleteProject } from "@/services/colleagues.service"
+import { getGrupos, addGrupoProject } from "@/services/groups.service"
 import { addLog, getLogs, deleteLog, updateLog } from "@/services/logs.service"
 import { addFeedback, getFeedback, deleteFeedback, updateFeedback } from "@/services/feedback.service"
-import { addTask, getTasks, updateTask, updateTaskStatus, deleteTask } from "@/services/tasks.service"
-import { notificarTareaCompletada } from "@/services/notificaciones.service"
+import { addTask, getTasks, updateTask, updateTaskStatus, deleteTask, updateTaskAvance, addTaskFile, removeTaskFile, solicitarPlazoTask, cancelarPlazoTask } from "@/services/tasks.service"
+import { notificarTareaCompletada, crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { queueTareaNotification } from "@/services/wpp.service"
-import { uploadDocument, getDocuments, deleteDocument, MAX_FILE_SIZE } from "@/services/storage.service"
+import { uploadDocument, getDocuments, deleteDocument, uploadTaskFile, deleteTaskFile, MAX_FILE_SIZE } from "@/services/storage.service"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
@@ -90,6 +91,10 @@ export default function ColleagueDetail() {
 
   const [companero, setCompanero] = useState(null)
   const [logs, setLogs] = useState([])
+  const [grupos, setGrupos] = useState([])
+  const [enrutandoProyecto, setEnrutandoProyecto] = useState(null)
+  const [grupoSeleccionado, setGrupoSeleccionado] = useState("")
+  const [savingEnrute, setSavingEnrute] = useState(false)
   const [nota, setNota] = useState("")
   const [saving, setSaving] = useState(false)
   const [editingLogId, setEditingLogId] = useState(null)
@@ -111,6 +116,9 @@ export default function ColleagueDetail() {
   const [showTaskForm, setShowTaskForm] = useState(false)
   const [editingTaskId, setEditingTaskId] = useState(null)
   const [editingTaskForm, setEditingTaskForm] = useState({})
+  const [solicitudMotivo, setSolicitudMotivo] = useState("")
+  const [solicitudFecha, setSolicitudFecha] = useState("")
+  const [savingSolicitud, setSavingSolicitud] = useState(false)
 
   const [documents, setDocuments] = useState([])
   const [uploadProgress, setUploadProgress] = useState(null)
@@ -125,7 +133,10 @@ export default function ColleagueDetail() {
     setLogs(await getLogs(id))
   }
 
-  useEffect(() => { loadData() }, [id])
+  useEffect(() => {
+    loadData()
+    getGrupos().then(setGrupos)
+  }, [id])
 
   useEffect(() => {
     if (isOwn || isAdmin) getFeedback(id).then(setFeedback)
@@ -153,6 +164,16 @@ export default function ColleagueDetail() {
           colleague: companero,
           tarea: taskForm,
           asignadoPor: user?.displayName || user?.email || "Admin",
+        }).catch(() => {})
+      }
+      // Notificación in-app al compañero
+      if (companero?.uid) {
+        crearNotificacionUsuario({
+          toUid: companero.uid,
+          tipo: "tarea_asignada",
+          titulo: "Te asignaron una nueva tarea",
+          subtitulo: taskForm.titulo.trim(),
+          path: `/colleague/${id}`,
         }).catch(() => {})
       }
       setTaskForm({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
@@ -205,6 +226,14 @@ export default function ColleagueDetail() {
     try {
       await updateTaskStatus(id, taskId, nuevoEstado)
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, estado: nuevoEstado } : t))
+      if (nuevoEstado === "Hecho") {
+        const task = tasks.find(t => t.id === taskId)
+        notificarTareaCompletada({
+          taskTitle: task?.titulo,
+          assigneeName: companero?.nombre || id,
+          path: `/colleague/${id}`,
+        }).catch(() => {})
+      }
     } catch (err) {
       console.error("[Workboard] Error actualizando tarea:", err.code, err.message)
     }
@@ -243,6 +272,27 @@ export default function ColleagueDetail() {
     }
   }
 
+  const handleSolicitarPlazo = async (taskId) => {
+    if (!solicitudMotivo.trim()) return
+    setSavingSolicitud(true)
+    try {
+      await solicitarPlazoTask(id, taskId, {
+        motivo: solicitudMotivo.trim(),
+        fechaPropuesta: solicitudFecha || null,
+        solicitadoPor: companero?.nombre || user?.displayName || user?.email,
+        fecha: new Date().toISOString(),
+      })
+      setSolicitudPlazoId(null)
+      setSolicitudMotivo("")
+      setSolicitudFecha("")
+      setTasks(await getTasks(id))
+    } catch (err) {
+      console.error("[Workboard] Error solicitando plazo:", err.code, err.message)
+    } finally {
+      setSavingSolicitud(false)
+    }
+  }
+
   const handleDelete = async () => {
     if (!confirm(`¿Eliminar a ${companero.nombre}? No se puede deshacer.`)) return
     await deleteColleague(id)
@@ -253,6 +303,22 @@ export default function ColleagueDetail() {
     if (!confirm(`¿Eliminar el proyecto "${proyecto.nombre}"?`)) return
     await deleteProject(id, proyecto)
     loadData()
+  }
+
+  const handleEnrutarProyecto = async () => {
+    if (!grupoSeleccionado || !enrutandoProyecto) return
+    setSavingEnrute(true)
+    try {
+      await addGrupoProject(grupoSeleccionado, enrutandoProyecto)
+      await deleteProject(id, enrutandoProyecto)
+      setEnrutandoProyecto(null)
+      setGrupoSeleccionado("")
+      loadData()
+    } catch (err) {
+      console.error("[Workboard] Error enrutando proyecto:", err)
+    } finally {
+      setSavingEnrute(false)
+    }
   }
 
   const handleAddLog = async (e) => {
@@ -330,7 +396,7 @@ export default function ColleagueDetail() {
     </div>
   )
 
-  const h = hashHue(id)
+  const h = companero.colorHue ?? hashHue(id)
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -361,12 +427,17 @@ export default function ColleagueDetail() {
           <div className="flex flex-col sm:flex-row sm:items-end gap-5">
 
             {/* Avatar */}
-            <div className="w-20 h-20 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-3xl"
+            <div className="w-20 h-20 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-3xl overflow-hidden"
               style={{
-                background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))`,
+                background: companero.avatarUrl ? "var(--card)" : `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))`,
                 boxShadow: `0 12px 32px oklch(0.55 0.20 ${h} / 45%), 0 0 0 2px oklch(0.72 0.14 ${h} / 30%)`,
               }}>
-              {companero.nombre?.charAt(0).toUpperCase()}
+              {companero.avatarUrl
+                ? <img src={companero.avatarUrl} alt={companero.nombre} className="w-full h-full object-cover" />
+                : companero.avatarEmoji
+                  ? <span className="text-4xl leading-none">{companero.avatarEmoji}</span>
+                  : companero.nombre?.charAt(0).toUpperCase()
+              }
             </div>
 
             {/* Info */}
@@ -521,10 +592,48 @@ export default function ColleagueDetail() {
                               style={{ color: `oklch(0.62 0.14 ${pH})` }}>
                               Editar
                             </button>
+                            {grupos.length > 0 && (
+                              <button
+                                onClick={() => { setEnrutandoProyecto(proyecto); setGrupoSeleccionado("") }}
+                                className="text-[12px] font-medium hover:opacity-70 transition-opacity"
+                                style={{ color: `oklch(0.62 0.16 145)` }}>
+                                → Grupo
+                              </button>
+                            )}
                             <button onClick={() => handleDeleteProject(proyecto)}
                               className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
                               Eliminar
                             </button>
+                          </div>
+                        )}
+
+                        {/* Selector de grupo para enrutar */}
+                        {enrutandoProyecto?.nombre === proyecto.nombre && enrutandoProyecto?.fechaInicio === proyecto.fechaInicio && (
+                          <div className="mt-3 p-3 rounded-xl border border-border bg-muted/30 space-y-2 w-full">
+                            <p className="text-[12px] font-semibold text-foreground">Mover proyecto al grupo:</p>
+                            <select
+                              value={grupoSeleccionado}
+                              onChange={e => setGrupoSeleccionado(e.target.value)}
+                              className="w-full bg-background border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40">
+                              <option value="">Selecciona un grupo…</option>
+                              {grupos.map(g => (
+                                <option key={g.id} value={g.id}>{g.nombre}</option>
+                              ))}
+                            </select>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={handleEnrutarProyecto}
+                                disabled={!grupoSeleccionado || savingEnrute}
+                                className="h-7 px-3 rounded-lg text-[11px] font-bold text-white disabled:opacity-50 transition-opacity"
+                                style={{ background: "oklch(0.58 0.18 145)" }}>
+                                {savingEnrute ? "Moviendo…" : "Confirmar"}
+                              </button>
+                              <button
+                                onClick={() => { setEnrutandoProyecto(null); setGrupoSeleccionado("") }}
+                                className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground transition-colors">
+                                Cancelar
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1038,47 +1147,105 @@ export default function ColleagueDetail() {
                       {editingTaskId === task.id ? (
                         /* ── Formulario edición inline ── */
                         <div className="space-y-3">
-                          <input value={editingTaskForm.titulo}
-                            onChange={e => setEditingTaskForm(f => ({ ...f, titulo: e.target.value }))}
-                            placeholder="Título *"
-                            className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
-                          <textarea value={editingTaskForm.descripcion}
-                            onChange={e => setEditingTaskForm(f => ({ ...f, descripcion: e.target.value }))}
-                            placeholder="Descripción (opcional)" rows={2}
-                            className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none" />
-                          <div className="flex gap-3">
-                            <div className="flex-1">
-                              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Fecha inicio</label>
-                              <input type="date" value={editingTaskForm.fechaInicio || ""}
-                                onChange={e => setEditingTaskForm(f => ({ ...f, fechaInicio: e.target.value }))}
-                                className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                          {/* Campos de edición — solo admin */}
+                          {isAdmin && (
+                            <>
+                              <input value={editingTaskForm.titulo}
+                                onChange={e => setEditingTaskForm(f => ({ ...f, titulo: e.target.value }))}
+                                placeholder="Título *"
+                                className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                              <textarea value={editingTaskForm.descripcion}
+                                onChange={e => setEditingTaskForm(f => ({ ...f, descripcion: e.target.value }))}
+                                placeholder="Descripción (opcional)" rows={2}
+                                className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none" />
+                              <div className="flex gap-3">
+                                <div className="flex-1">
+                                  <label className="block text-[11px] font-medium text-muted-foreground mb-1">Fecha inicio</label>
+                                  <input type="date" value={editingTaskForm.fechaInicio || ""}
+                                    onChange={e => setEditingTaskForm(f => ({ ...f, fechaInicio: e.target.value }))}
+                                    className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                                </div>
+                                <div className="flex-1">
+                                  <label className="block text-[11px] font-medium text-muted-foreground mb-1">Fecha límite</label>
+                                  <input type="date" value={editingTaskForm.fechaLimite || ""}
+                                    onChange={e => setEditingTaskForm(f => ({ ...f, fechaLimite: e.target.value }))}
+                                    className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                                </div>
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                                  Avance: <span className="font-bold text-foreground">{editingTaskForm.avance ?? 0}%</span>
+                                </label>
+                                <input type="range" min="0" max="100" step="5" value={editingTaskForm.avance ?? 0}
+                                  onChange={e => setEditingTaskForm(f => ({ ...f, avance: Number(e.target.value) }))}
+                                  className="w-full accent-primary" />
+                              </div>
+                              <div className="flex gap-2">
+                                <button onClick={() => handleSaveEditTask(task)}
+                                  className="h-8 px-4 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
+                                  style={{ background: "linear-gradient(135deg, oklch(0.58 0.20 260), oklch(0.50 0.22 280))" }}>
+                                  Guardar
+                                </button>
+                                <button onClick={() => { setEditingTaskId(null); setSolicitudMotivo(""); setSolicitudFecha("") }}
+                                  className="h-8 px-4 rounded-xl text-[12px] font-medium border border-border text-muted-foreground hover:text-foreground transition-colors">
+                                  Cancelar
+                                </button>
+                              </div>
+                            </>
+                          )}
+
+                          {/* Solicitud de más tiempo — dentro del formulario */}
+                          {isOwn && task.estado !== "Hecha" && (
+                            <div className={isAdmin ? "pt-3 border-t border-border space-y-2" : "space-y-2"}>
+                              <p className="text-[12px] font-semibold text-foreground">⏳ Solicitar más tiempo</p>
+                              {task.solicitudPlazo ? (
+                                <div className="px-3 py-2 rounded-lg space-y-1"
+                                  style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
+                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>Solicitud enviada</p>
+                                  <p className="text-[12px] text-foreground">{task.solicitudPlazo.motivo}</p>
+                                  {task.solicitudPlazo.fechaPropuesta && (
+                                    <p className="text-[11px] text-muted-foreground">
+                                      Fecha propuesta: {format(new Date(task.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                    </p>
+                                  )}
+                                  <button onClick={async () => { await cancelarPlazoTask(id, task.id); setTasks(await getTasks(id)) }}
+                                    className="text-[11px] text-destructive hover:opacity-70 transition-opacity mt-1">
+                                    Cancelar solicitud
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  <textarea
+                                    value={solicitudMotivo}
+                                    onChange={e => setSolicitudMotivo(e.target.value)}
+                                    placeholder="¿Por qué necesitas más tiempo?"
+                                    rows={2}
+                                    className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none"
+                                  />
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    <input type="date" value={solicitudFecha}
+                                      onChange={e => setSolicitudFecha(e.target.value)}
+                                      className="bg-muted/50 border border-border rounded-xl px-3 py-1.5 text-[12px] text-foreground focus:outline-none" />
+                                    <span className="text-[11px] text-muted-foreground">fecha propuesta (opcional)</span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button onClick={() => handleSolicitarPlazo(task.id)}
+                                      disabled={savingSolicitud || !solicitudMotivo.trim()}
+                                      className="h-7 px-3 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.58 0.20 55)" }}>
+                                      {savingSolicitud ? "Enviando…" : "Enviar solicitud"}
+                                    </button>
+                                    {!isAdmin && (
+                                      <button onClick={() => { setEditingTaskId(null); setSolicitudMotivo(""); setSolicitudFecha("") }}
+                                        className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
+                                        Cerrar
+                                      </button>
+                                    )}
+                                  </div>
+                                </>
+                              )}
                             </div>
-                            <div className="flex-1">
-                              <label className="block text-[11px] font-medium text-muted-foreground mb-1">Fecha límite</label>
-                              <input type="date" value={editingTaskForm.fechaLimite || ""}
-                                onChange={e => setEditingTaskForm(f => ({ ...f, fechaLimite: e.target.value }))}
-                                className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
-                              Avance: <span className="font-bold text-foreground">{editingTaskForm.avance ?? 0}%</span>
-                            </label>
-                            <input type="range" min="0" max="100" step="5" value={editingTaskForm.avance ?? 0}
-                              onChange={e => setEditingTaskForm(f => ({ ...f, avance: Number(e.target.value) }))}
-                              className="w-full accent-primary" />
-                          </div>
-                          <div className="flex gap-2">
-                            <button onClick={() => handleSaveEditTask(task)}
-                              className="h-8 px-4 rounded-xl text-[12px] font-bold text-white transition-all hover:opacity-90"
-                              style={{ background: "linear-gradient(135deg, oklch(0.58 0.20 260), oklch(0.50 0.22 280))" }}>
-                              Guardar
-                            </button>
-                            <button onClick={() => setEditingTaskId(null)}
-                              className="h-8 px-4 rounded-xl text-[12px] font-medium border border-border text-muted-foreground hover:text-foreground transition-colors">
-                              Cancelar
-                            </button>
-                          </div>
+                          )}
                         </div>
                       ) : (
                         /* ── Vista normal ── */
@@ -1110,9 +1277,16 @@ export default function ColleagueDetail() {
                                   {task.estado}
                                 </span>
                                 {isAdmin && (
-                                  <button onClick={() => { setEditingTaskId(task.id); setEditingTaskForm({ titulo: task.titulo, descripcion: task.descripcion || "", fechaInicio: task.fechaInicio || "", fechaLimite: task.fechaLimite || "", avance: task.avance ?? 0 }) }}
+                                  <button onClick={() => { setEditingTaskId(task.id); setSolicitudMotivo(""); setSolicitudFecha(""); setEditingTaskForm({ titulo: task.titulo, descripcion: task.descripcion || "", fechaInicio: task.fechaInicio || "", fechaLimite: task.fechaLimite || "", avance: task.avance ?? 0 }) }}
                                     className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground">
                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                  </button>
+                                )}
+                                {isOwn && !isAdmin && task.estado !== "Hecha" && !task.solicitudPlazo && (
+                                  <button onClick={() => { setEditingTaskId(task.id); setSolicitudMotivo(""); setSolicitudFecha("") }}
+                                    className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground"
+                                    title="Solicitar más tiempo">
+                                    ⏳
                                   </button>
                                 )}
                                 {isAdmin && (
@@ -1158,6 +1332,29 @@ export default function ColleagueDetail() {
                               )}
                               <span className="text-[11px] text-muted-foreground/60">De: {task.creadoPorNombre}</span>
                             </div>
+
+                            {/* Solicitud de plazo — admin ve el aviso */}
+                            {task.solicitudPlazo && isAdmin && (
+                              <div className="mt-2 px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                  ⏰ Solicitud de más tiempo · {task.solicitudPlazo.solicitadoPor}
+                                </p>
+                                <p className="text-[12px] text-foreground mt-0.5">{task.solicitudPlazo.motivo}</p>
+                                {task.solicitudPlazo.fechaPropuesta && (
+                                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                                    Fecha propuesta: {format(new Date(task.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Confirmación visible en la tarjeta una vez enviada */}
+                            {task.solicitudPlazo && isOwn && !isAdmin && (
+                              <p className="text-[11px] mt-1.5 font-medium" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                ⏰ Solicitud de más tiempo enviada
+                              </p>
+                            )}
                           </div>
                         </div>
                       )}

@@ -5,6 +5,13 @@ import { es } from "date-fns/locale"
 import { collection, query, orderBy, onSnapshot } from "firebase/firestore"
 import { db } from "@/services/firebase"
 
+const ICONS = {
+  tarea_asignada: "📋",
+  tarea_grupo: "📋",
+  feedback_grupo: "💬",
+  general: "🔔",
+}
+
 const storageKey = (type, id) => `wb_read_${type}_${id}`
 
 const getReadIds = (key) => {
@@ -16,7 +23,7 @@ const saveReadIds = (key, set) => {
   localStorage.setItem(key, JSON.stringify([...set]))
 }
 
-export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
+export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid }) {
   const [items, setItems] = useState([])
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
@@ -25,6 +32,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
     ? storageKey("logs", userEmail)
     : storageKey("fb", myColleagueId)
   const keyNotif = storageKey("notif", userEmail || "guest")
+  const keyUserNotif = storageKey("unotif", userUid || "guest")
 
   // ── Listener en tiempo real ─────────────────────────────────────────────
   useEffect(() => {
@@ -74,6 +82,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
         setItems(prev => [...prev.filter(i => i.source !== "notif"), ...fresh])
       }, () => {}))
     } else {
+      // Retroalimentación individual
       const q = query(
         collection(db, "companeros", myColleagueId, "retroalimentacion"),
         orderBy("createdAt", "desc")
@@ -92,15 +101,45 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
             href: `/colleague/${myColleagueId}`,
             dot: "oklch(0.60 0.22 27)",
           }))
-        setItems(fresh)
+        setItems(prev => [...prev.filter(i => i.source !== "fb"), ...fresh])
       }, () => {}))
+
+      // Notificaciones personales (tareas, feedback grupo, etc.)
+      if (userUid) {
+        const qU = query(
+          collection(db, "notif_usuario", userUid, "items"),
+          orderBy("createdAt", "desc")
+        )
+        unsubs.push(onSnapshot(qU, (snap) => {
+          const readIds = getReadIds(keyUserNotif)
+          const fresh = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(doc => !readIds.has(doc.id))
+            .map(doc => ({
+              id: doc.id,
+              source: "unotif",
+              text: doc.titulo || "Nueva notificación",
+              sub: doc.subtitulo || null,
+              date: doc.createdAt?.toDate?.(),
+              href: doc.path || "/dashboard",
+              dot: doc.tipo === "feedback_grupo" ? "oklch(0.60 0.22 27)" : "oklch(0.55 0.18 260)",
+            }))
+          setItems(prev => [...prev.filter(i => i.source !== "unotif"), ...fresh])
+        }, () => {}))
+      }
     }
 
     return () => unsubs.forEach(u => u())
-  }, [isAdmin, myColleagueId, key, keyNotif])
+  }, [isAdmin, myColleagueId, userUid, key, keyNotif, keyUserNotif])
+
+  const sourceKey = (source) => {
+    if (source === "notif") return keyNotif
+    if (source === "unotif") return keyUserNotif
+    return key
+  }
 
   const markOne = (id, source) => {
-    const k = source === "notif" ? keyNotif : key
+    const k = sourceKey(source)
     const readIds = getReadIds(k)
     readIds.add(id)
     saveReadIds(k, readIds)
@@ -110,7 +149,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail }) {
   const markAll = () => {
     const grouped = {}
     items.forEach(i => {
-      const k = i.source === "notif" ? keyNotif : key
+      const k = sourceKey(i.source)
       if (!grouped[k]) grouped[k] = getReadIds(k)
       grouped[k].add(i.id)
     })

@@ -6,12 +6,13 @@ export const getEquipos = async () => {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }))
 }
 
-export const createEquipo = async ({ nombre, descripcion, color, miembros }) => {
+export const createEquipo = async ({ nombre, descripcion, color, miembros, memberUids }) => {
   return await addDoc(collection(db, "equipos"), {
     nombre: nombre.trim(),
     descripcion: descripcion?.trim() || "",
     color: color || "295",
     miembros: miembros || [],
+    memberUids: memberUids || [],
     createdAt: serverTimestamp(),
   })
 }

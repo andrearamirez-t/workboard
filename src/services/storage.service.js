@@ -31,7 +31,7 @@ export const uploadDocument = (colleagueId, file, { onProgress, uploadedBy, uplo
             subidoPorNombre: uploadedByName || null,
             createdAt: serverTimestamp(),
           })
-          resolve({ id: docRef.id, nombre: file.name, url, size: file.size, tipo: file.type, storagePath })
+          resolve({ id: docRef.id, nombre: file.name, url, size: file.size, tipo: file.type, storagePath, proyectoNombre: proyectoNombre || null })
         } catch (err) {
           reject(err)
         }
@@ -50,4 +50,110 @@ export const getDocuments = async (colleagueId) => {
 export const deleteDocument = async (colleagueId, docId, storagePath) => {
   await deleteObject(ref(storage, storagePath))
   await deleteDoc(doc(db, "companeros", colleagueId, "documentos", docId))
+}
+
+// ── Documentos de grupo ──────────────────────────────────────────────────────
+export const uploadGroupDocument = (groupId, file, { onProgress, uploadedBy, uploadedByName, proyectoNombre } = {}) => {
+  return new Promise((resolve, reject) => {
+    const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`
+    const safeProjName = proyectoNombre ? proyectoNombre.replace(/[^a-zA-Z0-9._-]/g, "_") : "_general"
+    const storagePath = `documentos-grupo/${groupId}/${safeProjName}/${safeName}`
+    const storageRef = ref(storage, storagePath)
+    const task = uploadBytesResumable(storageRef, file)
+
+    task.on(
+      "state_changed",
+      snap => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+      reject,
+      async () => {
+        try {
+          const url = await getDownloadURL(task.snapshot.ref)
+          const docRef = await addDoc(collection(db, "equipos", groupId, "documentos"), {
+            nombre: file.name, url, storagePath,
+            size: file.size, tipo: file.type || "application/octet-stream",
+            proyectoNombre: proyectoNombre || null,
+            subidoPor: uploadedBy || null, subidoPorNombre: uploadedByName || null,
+            createdAt: serverTimestamp(),
+          })
+          resolve({ id: docRef.id, nombre: file.name, url, size: file.size, tipo: file.type, storagePath, proyectoNombre: proyectoNombre || null })
+        } catch (err) { reject(err) }
+      }
+    )
+  })
+}
+
+export const getGroupDocuments = async (groupId) => {
+  const snap = await getDocs(
+    query(collection(db, "equipos", groupId, "documentos"), orderBy("createdAt", "desc"))
+  )
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+}
+
+export const deleteGroupDocument = async (groupId, docId, storagePath) => {
+  await deleteObject(ref(storage, storagePath))
+  await deleteDoc(doc(db, "equipos", groupId, "documentos", docId))
+}
+
+// ── Avatar de perfil ──────────────────────────────────────────────────────────
+export const uploadAvatar = (colleagueId, file, { onProgress } = {}) => {
+  return new Promise((resolve, reject) => {
+    const ext = file.name.split(".").pop().toLowerCase() || "jpg"
+    const storagePath = `avatares/${colleagueId}/avatar.${ext}`
+    const storageRef = ref(storage, storagePath)
+    const task = uploadBytesResumable(storageRef, file)
+    task.on("state_changed",
+      snap => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+      reject,
+      async () => {
+        try {
+          const url = await getDownloadURL(task.snapshot.ref)
+          resolve({ url, storagePath })
+        } catch (err) { reject(err) }
+      }
+    )
+  })
+}
+
+// ── Archivos adjuntos a tareas individuales ──────────────────────────────────
+export const uploadTaskFile = (colleagueId, taskId, file, { onProgress } = {}) => {
+  return new Promise((resolve, reject) => {
+    const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`
+    const storagePath = `tareas/${colleagueId}/${taskId}/${safeName}`
+    const storageRef = ref(storage, storagePath)
+    const task = uploadBytesResumable(storageRef, file)
+    task.on("state_changed",
+      snap => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+      reject,
+      async () => {
+        try {
+          const url = await getDownloadURL(task.snapshot.ref)
+          resolve({ url, nombre: file.name, size: file.size, tipo: file.type || "application/octet-stream", storagePath })
+        } catch (err) { reject(err) }
+      }
+    )
+  })
+}
+
+export const deleteTaskFile = async (storagePath) => {
+  await deleteObject(ref(storage, storagePath))
+}
+
+// ── Archivos adjuntos a tareas de grupo ──────────────────────────────────────
+export const uploadGrupoTaskFile = (grupoId, taskId, file, { onProgress } = {}) => {
+  return new Promise((resolve, reject) => {
+    const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`
+    const storagePath = `tareas-grupo/${grupoId}/${taskId}/${safeName}`
+    const storageRef = ref(storage, storagePath)
+    const task = uploadBytesResumable(storageRef, file)
+    task.on("state_changed",
+      snap => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+      reject,
+      async () => {
+        try {
+          const url = await getDownloadURL(task.snapshot.ref)
+          resolve({ url, nombre: file.name, size: file.size, tipo: file.type || "application/octet-stream", storagePath })
+        } catch (err) { reject(err) }
+      }
+    )
+  })
 }

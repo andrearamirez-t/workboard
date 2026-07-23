@@ -69,6 +69,14 @@ service cloud.firestore {
       allow create: if request.auth != null;
     }
 
+    // ── Notificaciones personales por usuario ───────────────────
+    match /notif_usuario/{uid} {
+      match /items/{itemId} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+        allow create: if request.auth != null;
+      }
+    }
+
     // ── Cola de notificaciones WhatsApp ─────────────────────────
     match /wpp_queue/{docId} {
       allow create: if isAdmin();
@@ -95,6 +103,12 @@ service cloud.firestore {
       match /retroalimentacion/{fbId} {
         allow read: if isGrupoMemberOrAdmin(equipoId);
         allow write: if isAdmin();
+      }
+
+      match /documentos/{docId} {
+        allow read: if isGrupoMemberOrAdmin(equipoId);
+        allow create: if isGrupoMemberOrAdmin(equipoId);
+        allow delete: if isAdmin();
       }
     }
 

@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, deleteDoc, updateDoc, doc, serverTimestamp, orderBy, query } from "firebase/firestore"
+import { collection, addDoc, getDocs, deleteDoc, updateDoc, doc, serverTimestamp, orderBy, query, arrayUnion, arrayRemove, deleteField } from "firebase/firestore"
 import { db } from "@/services/firebase"
 
 export const addTask = async (colleagueId, task, author) => {
@@ -31,4 +31,26 @@ export const updateTaskStatus = async (colleagueId, taskId, estado) => {
 
 export const deleteTask = async (colleagueId, taskId) => {
   return await deleteDoc(doc(db, "companeros", colleagueId, "tareas", taskId))
+}
+
+export const updateTaskAvance = async (colleagueId, taskId, avance, nuevoEstado) => {
+  const data = { avance }
+  if (nuevoEstado) data.estado = nuevoEstado
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), data)
+}
+
+export const addTaskFile = async (colleagueId, taskId, archivo) => {
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), { archivos: arrayUnion(archivo) })
+}
+
+export const removeTaskFile = async (colleagueId, taskId, archivo) => {
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), { archivos: arrayRemove(archivo) })
+}
+
+export const solicitarPlazoTask = async (colleagueId, taskId, solicitud) => {
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), { solicitudPlazo: solicitud })
+}
+
+export const cancelarPlazoTask = async (colleagueId, taskId) => {
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), { solicitudPlazo: deleteField() })
 }

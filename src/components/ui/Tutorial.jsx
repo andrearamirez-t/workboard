@@ -88,15 +88,20 @@ export function Tutorial({ userEmail, forceOpen = false, onClose }) {
 
   const card = (
     <div
-      className="w-full rounded-2xl overflow-hidden"
+      className="wb-tutorial-card w-full rounded-2xl overflow-hidden"
       style={{
         width: MODAL_W,
-        background: "linear-gradient(145deg, var(--card), oklch(0.16 0.05 260 / 0.97))",
         border: "1px solid oklch(0.55 0.18 260 / 0.4)",
         boxShadow: "0 28px 70px oklch(0 0 0 / 0.55), 0 0 0 1px oklch(0.55 0.18 260 / 0.2)",
       }}
       onClick={e => e.stopPropagation()}
     >
+      <style>{`
+        .wb-tutorial-card { background: var(--card); }
+        @media (prefers-color-scheme: dark) { .wb-tutorial-card { background: linear-gradient(145deg, var(--card), oklch(0.12 0.05 260 / 0.97)); } }
+        :root[data-theme="dark"] .wb-tutorial-card { background: linear-gradient(145deg, var(--card), oklch(0.12 0.05 260 / 0.97)); }
+        :root[data-theme="light"] .wb-tutorial-card { background: var(--card); }
+      `}</style>
       {/* Step dots */}
       <div className="flex items-center justify-center gap-1.5 pt-5 pb-1">
         {STEPS.map((_, i) => (

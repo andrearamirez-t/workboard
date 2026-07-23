@@ -323,6 +323,55 @@ export default function ProjectForm() {
             </div>
           </div>
 
+          {/* ── Archivos del proyecto (solo en modo edición) ── */}
+          {isEdit && (
+            <div className="rounded-2xl border border-border bg-card p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-[14px] font-semibold text-foreground">Archivos del proyecto</h3>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadProgress !== null}
+                  className="text-[12px] font-semibold px-4 py-1.5 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
+                  style={{ background: "oklch(0.52 0.22 295)" }}>
+                  {uploadProgress !== null ? `${uploadProgress}%` : "↑ Subir archivo"}
+                </button>
+              </div>
+
+              {uploadProgress !== null && (
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-200"
+                    style={{ width: `${uploadProgress}%`, background: "oklch(0.52 0.22 295)" }} />
+                </div>
+              )}
+              {uploadError && <p className="text-[12px] text-destructive">{uploadError}</p>}
+
+              {documents.length === 0 ? (
+                <p className="text-[12px] text-muted-foreground italic">Sin archivos aún. Sube documentos, imágenes o presentaciones del proyecto.</p>
+              ) : (
+                <div className="space-y-2">
+                  {documents.map(d => {
+                    const fi = getFileTypeInfo(d.tipo, d.nombre)
+                    return (
+                      <div key={d.id} className="flex items-center gap-2.5 px-3 py-2 rounded-xl border border-border/60 bg-muted/30">
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0"
+                          style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
+                        <span className="flex-1 text-[12px] text-foreground truncate">{d.nombre}</span>
+                        {d.size && <span className="text-[11px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
+                        <a href={d.url} target="_blank" rel="noopener noreferrer"
+                          className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 text-[13px]" title="Abrir">↗</a>
+                        {(isAdmin || true) && (
+                          <button type="button" onClick={() => handleDeleteDoc(d)}
+                            className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0 text-[15px] leading-none">×</button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── Actions ── */}
           {saveError && (
             <div className="rounded-xl border border-destructive/30 bg-destructive/8 px-4 py-2.5">
@@ -339,6 +388,13 @@ export default function ProjectForm() {
         </form>
       </div>
       <Footer />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"
+        style={{ display: "none" }}
+        onChange={handleFileSelected}
+      />
     </div>
   )
 }

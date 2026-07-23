@@ -1,5 +1,5 @@
 import {
-  doc, getDoc, updateDoc, arrayRemove,
+  doc, getDoc, updateDoc, arrayRemove, arrayUnion,
   collection, addDoc, getDocs, deleteDoc,
   query, orderBy, serverTimestamp,
 } from "firebase/firestore"
@@ -9,6 +9,11 @@ import { db } from "@/services/firebase"
 export const getGrupo = async (id) => {
   const snap = await getDoc(doc(db, "equipos", id))
   return snap.exists() ? { id: snap.id, ...snap.data() } : null
+}
+
+export const getGrupos = async () => {
+  const snap = await getDocs(collection(db, "equipos"))
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
 }
 
 // ── Proyectos (array en el documento) ─────────────────────────────────────
@@ -86,6 +91,24 @@ export const updateGrupoTaskStatus = async (grupoId, taskId, estado) => {
 
 export const deleteGrupoTask = async (grupoId, taskId) => {
   return await deleteDoc(doc(db, "equipos", grupoId, "tareas", taskId))
+}
+
+export const updateGrupoTaskAvance = async (grupoId, taskId, avance, nuevoEstado) => {
+  const data = { avance }
+  if (nuevoEstado) data.estado = nuevoEstado
+  return await updateDoc(doc(db, "equipos", grupoId, "tareas", taskId), data)
+}
+
+export const addGrupoTaskFile = async (grupoId, taskId, archivo) => {
+  return await updateDoc(doc(db, "equipos", grupoId, "tareas", taskId), { archivos: arrayUnion(archivo) })
+}
+
+export const removeGrupoTaskFile = async (grupoId, taskId, archivo) => {
+  return await updateDoc(doc(db, "equipos", grupoId, "tareas", taskId), { archivos: arrayRemove(archivo) })
+}
+
+export const solicitarPlazoGrupoTask = async (grupoId, taskId, solicitud) => {
+  return await updateDoc(doc(db, "equipos", grupoId, "tareas", taskId), { solicitudPlazo: solicitud })
 }
 
 // ── Retroalimentación (subcollection) ────────────────────────────────────

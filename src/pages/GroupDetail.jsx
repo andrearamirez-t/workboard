@@ -12,10 +12,29 @@ import {
   addGrupoLog, getGrupoLogs, deleteGrupoLog, updateGrupoLog,
   addGrupoTask, getGrupoTasks, updateGrupoTask, updateGrupoTaskStatus, deleteGrupoTask,
   addGrupoFeedback, getGrupoFeedback, deleteGrupoFeedback, updateGrupoFeedback,
+  solicitarPlazoGrupoTask,
 } from "@/services/groups.service"
-import { notificarTareaCompletada } from "@/services/notificaciones.service"
+import { notificarTareaCompletada, crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { getColleagues } from "@/services/colleagues.service"
+import { uploadGroupDocument, getGroupDocuments, deleteGroupDocument, MAX_FILE_SIZE } from "@/services/storage.service"
 import { Pencil, Trash2, Check, X, Plus, ChevronDown, ChevronUp } from "lucide-react"
+
+function getFileTypeInfo(tipo, nombre) {
+  const ext = (nombre || "").split(".").pop().toLowerCase()
+  if (tipo?.includes("pdf") || ext === "pdf")       return { label: "PDF", color: "oklch(0.50 0.22 27)",  bg: "oklch(0.65 0.22 27 / 0.15)"  }
+  if (tipo?.includes("word") || ["doc","docx"].includes(ext)) return { label: "DOC", color: "oklch(0.50 0.20 260)", bg: "oklch(0.62 0.18 260 / 0.15)" }
+  if (tipo?.includes("sheet") || tipo?.includes("excel") || ["xls","xlsx"].includes(ext)) return { label: "XLS", color: "oklch(0.50 0.18 145)", bg: "oklch(0.55 0.18 145 / 0.15)" }
+  if (tipo?.includes("presentation") || ["ppt","pptx"].includes(ext)) return { label: "PPT", color: "oklch(0.55 0.22 35)", bg: "oklch(0.65 0.20 35 / 0.15)" }
+  if (tipo?.includes("image") || ["jpg","jpeg","png","gif","webp"].includes(ext)) return { label: "IMG", color: "oklch(0.50 0.18 295)", bg: "oklch(0.62 0.18 295 / 0.15)" }
+  return { label: "FILE", color: "oklch(0.55 0.04 270)", bg: "oklch(0.55 0.04 270 / 0.15)" }
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return ""
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
@@ -64,12 +83,25 @@ export default function GroupDetail() {
   const [savingProject, setSavingProject] = useState(false)
   const [projectSearch, setProjectSearch] = useState("")
 
+  // Documentos
+  const fileInputRef = useRef(null)
+  const uploadingProjectRef = useRef(null) // ref para evitar stale closure
+  const [groupDocuments, setGroupDocuments] = useState([])
+  const [uploadProgress, setUploadProgress] = useState(null)
+  const [uploadError, setUploadError] = useState("")
+  const [uploadingForProject, setUploadingForProject] = useState(null)
+  const [openDocProjects, setOpenDocProjects] = useState(new Set())
+
   // Tareas
   const [showTaskForm, setShowTaskForm] = useState(false)
   const [taskForm, setTaskForm] = useState({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
   const [savingTask, setSavingTask] = useState(false)
   const [editingTaskId, setEditingTaskId] = useState(null)
   const [editingTaskForm, setEditingTaskForm] = useState({})
+  const [solicitudPlazoId, setSolicitudPlazoId] = useState(null)
+  const [solicitudMotivo, setSolicitudMotivo] = useState("")
+  const [solicitudFecha, setSolicitudFecha] = useState("")
+  const [savingSolicitud, setSavingSolicitud] = useState(false)
 
   // Retroalimentación
   const [feedbackText, setFeedbackText] = useState("")
@@ -96,14 +128,16 @@ export default function GroupDetail() {
         return c && (c.uid === user?.uid || c.email === user?.email)
       })
       if (isAdmin || member) {
-        const [ls, ts, fb] = await Promise.all([
+        const [ls, ts, fb, docs] = await Promise.all([
           getGrupoLogs(id),
           getGrupoTasks(id),
           getGrupoFeedback(id),
+          getGroupDocuments(id),
         ])
         setLogs(ls)
         setTasks(ts)
         setFeedback(fb)
+        setGroupDocuments(docs)
       }
     } finally { setLoadingData(false) }
   }
@@ -116,6 +150,42 @@ export default function GroupDetail() {
   })
   const canAccess = isAdmin || isMember
   const canLog = isAdmin || isMember
+
+  // ── Documentos de grupo ───────────────────────────────────────────────────
+  const handleFileSelected = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    // Usar el ref como fuente de verdad (evita stale closure de estado React)
+    const proyNombre = uploadingProjectRef.current
+    if (!proyNombre) return
+    if (file.size > MAX_FILE_SIZE) { setUploadError("El archivo supera el límite de 15 MB."); return }
+    setUploadError("")
+    setUploadProgress(0)
+    try {
+      const newDoc = await uploadGroupDocument(id, file, {
+        onProgress: setUploadProgress,
+        uploadedBy: user?.uid,
+        uploadedByName: user?.displayName || user?.email,
+        proyectoNombre: String(proyNombre),
+      })
+      setGroupDocuments(prev => [newDoc, ...prev])
+    } catch (err) {
+      console.error("[Workboard] Error subiendo archivo al grupo:", err)
+      setUploadError("No se pudo subir el archivo.")
+    } finally {
+      setUploadProgress(null)
+      uploadingProjectRef.current = null
+    }
+  }
+
+  const handleDeleteGroupDoc = async (d) => {
+    if (!window.confirm(`¿Eliminar "${d.nombre}"?`)) return
+    try {
+      await deleteGroupDocument(id, d.id, d.storagePath)
+      setGroupDocuments(prev => prev.filter(x => x.id !== d.id))
+    } catch (err) { console.error(err) }
+  }
 
   // ── Bitácora ─────────────────────────────────────────────────────────────
   const handleAddLog = async () => {
@@ -174,6 +244,15 @@ export default function GroupDetail() {
     setShowProjectForm(true)
   }
 
+  // Notifica a todos los miembros del grupo que no son admin
+  const notificarMiembros = ({ tipo, titulo, subtitulo, path: p }) => {
+    const memberColleagues = colleagues.filter(c => (grupo?.miembros || []).includes(c.id))
+    memberColleagues.forEach(c => {
+      if (!c.uid || ADMIN_EMAILS.includes(c.email)) return
+      crearNotificacionUsuario({ toUid: c.uid, tipo, titulo, subtitulo, path: p }).catch(() => {})
+    })
+  }
+
   // ── Tareas ────────────────────────────────────────────────────────────────
   const handleAddTask = async () => {
     if (!taskForm.titulo.trim()) return
@@ -183,6 +262,13 @@ export default function GroupDetail() {
       if (Number(taskForm.avance) >= 100) {
         notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), grupoNombre: grupo?.nombre, path: `/grupo/${id}` }).catch(() => {})
       }
+      // Notificar a los miembros del grupo
+      notificarMiembros({
+        tipo: "tarea_grupo",
+        titulo: `Nueva tarea en "${grupo?.nombre}"`,
+        subtitulo: taskForm.titulo.trim(),
+        path: `/grupo/${id}`,
+      })
       setTasks(await getGrupoTasks(id))
       setTaskForm({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
       setShowTaskForm(false)
@@ -192,11 +278,42 @@ export default function GroupDetail() {
   const handleTaskStatus = async (taskId, estado) => {
     await updateGrupoTaskStatus(id, taskId, estado)
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, estado } : t))
+    if (estado === "Hecho") {
+      const task = tasks.find(t => t.id === taskId)
+      notificarTareaCompletada({
+        taskTitle: task?.titulo,
+        grupoNombre: grupo?.nombre,
+        path: `/grupo/${id}`,
+      }).catch(() => {})
+    }
   }
 
   const handleDeleteTask = async (taskId) => {
     await deleteGrupoTask(id, taskId)
     setTasks(prev => prev.filter(t => t.id !== taskId))
+  }
+
+  const handleSolicitarPlazo = async (taskId) => {
+    if (!solicitudMotivo.trim()) return
+    setSavingSolicitud(true)
+    const miembrosLocal = (grupo?.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
+    const yo = miembrosLocal.find(m => m.id === myColleagueId)
+    try {
+      await solicitarPlazoGrupoTask(id, taskId, {
+        motivo: solicitudMotivo.trim(),
+        fechaPropuesta: solicitudFecha || null,
+        solicitadoPor: yo?.nombre || user?.displayName || user?.email,
+        fecha: new Date().toISOString(),
+      })
+      setSolicitudPlazoId(null)
+      setSolicitudMotivo("")
+      setSolicitudFecha("")
+      setTasks(await getGrupoTasks(id))
+    } catch (err) {
+      console.error("[Workboard] Error solicitando plazo grupo:", err)
+    } finally {
+      setSavingSolicitud(false)
+    }
   }
 
   const handleSaveEditTask = async (task) => {
@@ -224,6 +341,13 @@ export default function GroupDetail() {
     setSavingFeedback(true)
     try {
       await addGrupoFeedback(id, feedbackText.trim(), user)
+      // Notificar a los miembros del grupo
+      notificarMiembros({
+        tipo: "feedback_grupo",
+        titulo: `Nuevo feedback en "${grupo?.nombre}"`,
+        subtitulo: feedbackText.trim().slice(0, 80),
+        path: `/grupo/${id}`,
+      })
       setFeedbackText("")
       setFeedback(await getGrupoFeedback(id))
     } finally { setSavingFeedback(false) }
@@ -305,13 +429,18 @@ export default function GroupDetail() {
                 <div className="flex items-center gap-2 mt-3">
                   <div className="flex -space-x-2">
                     {miembros.slice(0, 6).map(c => {
-                      const ch = hashHue(c.id)
+                      const ch = c.colorHue ?? hashHue(c.id)
                       return (
                         <a key={c.id} href={`/colleague/${c.id}`}
-                          className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0 hover:z-10 hover:scale-110 transition-transform"
-                          style={{ background: `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}
+                          className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0 hover:z-10 hover:scale-110 transition-transform overflow-hidden"
+                          style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}
                           title={c.nombre}>
-                          {c.nombre?.charAt(0).toUpperCase()}
+                          {c.avatarUrl
+                            ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                            : c.avatarEmoji
+                              ? <span className="text-sm leading-none">{c.avatarEmoji}</span>
+                              : c.nombre?.charAt(0).toUpperCase()
+                          }
                         </a>
                       )
                     })}
@@ -336,7 +465,7 @@ export default function GroupDetail() {
               <span className="text-[12px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{grupo.proyectos?.length || 0}</span>
             </div>
             <div className="flex items-center gap-2">
-              {isAdmin && openSections.proyectos && (
+              {(isAdmin || isMember) && openSections.proyectos && (
                 <button onClick={e => { e.stopPropagation(); setEditingProject(null); setProjectForm(EMPTY_PROJECT); setShowProjectForm(v => !v) }}
                   className="flex items-center gap-1 text-[12px] font-medium px-3 py-1 rounded-lg"
                   style={{ background: `oklch(0.62 0.22 ${hue} / 0.12)`, color: `oklch(0.52 0.22 ${hue})` }}>
@@ -350,7 +479,7 @@ export default function GroupDetail() {
           {openSections.proyectos && (
             <>
               {/* Formulario proyecto */}
-              {showProjectForm && isAdmin && (
+              {showProjectForm && (isAdmin || isMember) && (
                 <div className="bg-muted/40 border border-border rounded-xl p-4 mb-4 space-y-3">
                   <p className="text-[13px] font-semibold text-foreground">{editingProject ? "Editar proyecto" : "Nuevo proyecto"}</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -405,6 +534,60 @@ export default function GroupDetail() {
                         rows={2} className={inputCls + " resize-none"} />
                     </div>
                   </div>
+                  {/* ── Archivos del proyecto (solo en edición) ── */}
+                  {editingProject && (() => {
+                    const editProjName = editingProject?.nombre || editingProject
+                    const proyDocs = groupDocuments.filter(d => d.proyectoNombre === editProjName)
+                    const isUploading = uploadingForProject === editProjName && uploadProgress !== null
+                    return (
+                      <div className="border-t border-border pt-3 mt-1">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className={labelCls + " mb-0"}>Archivos del proyecto</p>
+                          <button
+                            type="button"
+                            onClick={() => { uploadingProjectRef.current = editProjName; setUploadingForProject(editProjName); fileInputRef.current?.click() }}
+                            disabled={uploadProgress !== null}
+                            className="text-[11px] font-semibold px-3 py-1 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
+                            style={{ background: `oklch(0.52 0.22 ${hue})` }}>
+                            {isUploading ? `${uploadProgress}%` : "↑ Subir archivo"}
+                          </button>
+                        </div>
+                        {isUploading && (
+                          <div className="h-1 rounded-full bg-muted overflow-hidden mb-2">
+                            <div className="h-full rounded-full transition-all duration-200"
+                              style={{ width: `${uploadProgress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
+                          </div>
+                        )}
+                        {uploadingForProject === editProjName && uploadError && (
+                          <p className="text-[11px] text-destructive mb-2">{uploadError}</p>
+                        )}
+                        {proyDocs.length === 0 ? (
+                          <p className="text-[11px] text-muted-foreground italic">Sin archivos aún.</p>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {proyDocs.map(d => {
+                              const fi = getFileTypeInfo(d.tipo, d.nombre)
+                              return (
+                                <div key={d.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/60 bg-background/60">
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0"
+                                    style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
+                                  <span className="flex-1 text-[11px] text-foreground truncate">{d.nombre}</span>
+                                  {d.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
+                                  <a href={d.url} target="_blank" rel="noopener noreferrer"
+                                    className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↗</a>
+                                  {isAdmin && (
+                                    <button type="button" onClick={() => handleDeleteGroupDoc(d)}
+                                      className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
+
                   <div className="flex gap-2">
                     <Button size="sm" onClick={handleSaveProject} disabled={savingProject}>
                       {savingProject ? "Guardando…" : editingProject ? "Actualizar" : "Crear proyecto"}
@@ -449,14 +632,16 @@ export default function GroupDetail() {
                               )}
                             </div>
                           </div>
-                          {isAdmin && (
+                          {(isAdmin || isMember) && (
                             <div className="flex gap-2 flex-shrink-0">
                               <button onClick={() => openEditProject(p)} className="text-muted-foreground hover:text-foreground transition-colors">
                                 <Pencil size={13} />
                               </button>
-                              <button onClick={() => handleDeleteProject(p)} className="text-destructive/60 hover:text-destructive transition-colors">
-                                <Trash2 size={13} />
-                              </button>
+                              {isAdmin && (
+                                <button onClick={() => handleDeleteProject(p)} className="text-destructive/60 hover:text-destructive transition-colors">
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -487,6 +672,74 @@ export default function GroupDetail() {
                         {p.observaciones && (
                           <p className="text-[12px] text-muted-foreground mt-2 italic">{p.observaciones}</p>
                         )}
+
+                        {/* ── Archivos del proyecto ── */}
+                        {canAccess && (() => {
+                          const proyDocs = groupDocuments.filter(d => d.proyectoNombre === p.nombre)
+                          const isOpen = openDocProjects.has(p.nombre)
+                          const isUploading = uploadingForProject === p.nombre && uploadProgress !== null
+                          return (
+                            <div className="mt-3 pt-3 border-t border-border">
+                              <div className="flex items-center justify-between">
+                                <button
+                                  onClick={() => setOpenDocProjects(prev => {
+                                    const s = new Set(prev)
+                                    s.has(p.nombre) ? s.delete(p.nombre) : s.add(p.nombre)
+                                    return s
+                                  })}
+                                  className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                                  <span>Archivos</span>
+                                  {proyDocs.length > 0 && (
+                                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                                      style={{ backgroundColor: `oklch(0.62 0.18 ${hue} / 0.15)`, color: `oklch(0.52 0.20 ${hue})` }}>
+                                      {proyDocs.length}
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] opacity-50">{isOpen ? "▲" : "▼"}</span>
+                                </button>
+                                <button
+                                  onClick={() => { uploadingProjectRef.current = p.nombre; setUploadingForProject(p.nombre); fileInputRef.current?.click() }}
+                                  disabled={uploadProgress !== null}
+                                  className="text-[11px] font-semibold px-3 py-1 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
+                                  style={{ background: `oklch(0.52 0.22 ${hue})` }}>
+                                  {isUploading ? `${uploadProgress}%` : "↑ Subir"}
+                                </button>
+                              </div>
+                              {isUploading && (
+                                <div className="h-1 rounded-full bg-muted overflow-hidden mt-2">
+                                  <div className="h-full rounded-full transition-all duration-200"
+                                    style={{ width: `${uploadProgress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
+                                </div>
+                              )}
+                              {uploadingForProject === p.nombre && uploadError && (
+                                <p className="text-[11px] text-destructive mt-1">{uploadError}</p>
+                              )}
+                              {isOpen && (
+                                <div className="mt-2 space-y-1.5">
+                                  {proyDocs.length === 0 ? (
+                                    <p className="text-[11px] text-muted-foreground italic">Sin archivos aún.</p>
+                                  ) : proyDocs.map(d => {
+                                    const fi = getFileTypeInfo(d.tipo, d.nombre)
+                                    return (
+                                      <div key={d.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/60 bg-muted/30">
+                                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0"
+                                          style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
+                                        <span className="flex-1 text-[11px] text-foreground truncate">{d.nombre}</span>
+                                        {d.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
+                                        <a href={d.url} target="_blank" rel="noopener noreferrer"
+                                          className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↗</a>
+                                        {isAdmin && (
+                                          <button onClick={() => handleDeleteGroupDoc(d)}
+                                            className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
+                                        )}
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </div>
                     )
                   })}
@@ -717,6 +970,68 @@ export default function GroupDetail() {
                                 {t.fechaInicio && <p className="text-[11px] text-muted-foreground">Inicio: {t.fechaInicio}</p>}
                                 {t.fechaLimite && <p className="text-[11px] text-muted-foreground">Límite: {t.fechaLimite}</p>}
                               </div>
+
+                              {/* Solicitud de plazo — admin ve el aviso */}
+                              {t.solicitudPlazo && isAdmin && (
+                                <div className="mt-2 px-3 py-2 rounded-lg"
+                                  style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
+                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                    ⏰ Solicitud de más tiempo · {t.solicitudPlazo.solicitadoPor}
+                                  </p>
+                                  <p className="text-[12px] text-foreground mt-0.5">{t.solicitudPlazo.motivo}</p>
+                                  {t.solicitudPlazo.fechaPropuesta && (
+                                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                                      Fecha propuesta: {t.solicitudPlazo.fechaPropuesta}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Confirmación para el miembro que ya solicitó */}
+                              {t.solicitudPlazo && isMember && (
+                                <p className="text-[11px] mt-1.5 font-medium" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                  ⏰ Solicitud de más tiempo enviada
+                                </p>
+                              )}
+
+                              {/* Botón / formulario para pedir plazo */}
+                              {isMember && !done && !t.solicitudPlazo && (
+                                solicitudPlazoId === t.id ? (
+                                  <div className="mt-2 space-y-2">
+                                    <textarea
+                                      value={solicitudMotivo}
+                                      onChange={e => setSolicitudMotivo(e.target.value)}
+                                      placeholder="¿Por qué necesitas más tiempo?"
+                                      rows={2}
+                                      className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none"
+                                    />
+                                    <div className="flex flex-wrap gap-2 items-center">
+                                      <input type="date" value={solicitudFecha}
+                                        onChange={e => setSolicitudFecha(e.target.value)}
+                                        className="bg-muted/50 border border-border rounded-xl px-3 py-1.5 text-[12px] text-foreground focus:outline-none" />
+                                      <span className="text-[11px] text-muted-foreground">fecha propuesta (opcional)</span>
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <button onClick={() => handleSolicitarPlazo(t.id)}
+                                        disabled={savingSolicitud || !solicitudMotivo.trim()}
+                                        className="h-7 px-3 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                        style={{ background: "oklch(0.58 0.20 55)" }}>
+                                        {savingSolicitud ? "Enviando…" : "Enviar solicitud"}
+                                      </button>
+                                      <button onClick={() => { setSolicitudPlazoId(null); setSolicitudMotivo(""); setSolicitudFecha("") }}
+                                        className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
+                                        Cancelar
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button onClick={() => { setSolicitudPlazoId(t.id); setSolicitudMotivo(""); setSolicitudFecha("") }}
+                                    className="mt-1.5 text-[11px] font-medium hover:opacity-70 transition-opacity"
+                                    style={{ color: "oklch(0.58 0.20 55)" }}>
+                                    ⏳ Solicitar más tiempo
+                                  </button>
+                                )
+                              )}
                             </div>
                             {isAdmin && (
                               <div className="flex gap-1.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -810,6 +1125,15 @@ export default function GroupDetail() {
 
       </main>
       <Footer />
+
+      {/* Input de archivo oculto para subir documentos de grupo */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"
+        style={{ display: "none" }}
+        onChange={handleFileSelected}
+      />
     </div>
   )
 }

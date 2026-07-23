@@ -60,7 +60,13 @@ export default function Dashboard() {
       if (editingEquipo) {
         await updateEquipo(editingEquipo.id, { nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color })
       } else {
-        await createEquipo({ nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color, miembros: [] })
+        await createEquipo({
+          nombre: equipoForm.nombre.trim(),
+          descripcion: equipoForm.descripcion.trim(),
+          color: equipoForm.color,
+          miembros: myColleagueId ? [myColleagueId] : [],
+          memberUids: user?.uid ? [user.uid] : [],
+        })
       }
       await reloadEquipos()
       setShowEquipoForm(false)
@@ -108,14 +114,16 @@ export default function Dashboard() {
   const totalProjects = colleagues.reduce((sum, c) => sum + (c.proyectos?.length || 0), 0)
   const totalTools = new Set(colleagues.flatMap(c => c.herramientas || [])).size
 
-  const filtered = colleagues.filter(c => {
-    const q = search.toLowerCase()
-    return !q ||
-      c.nombre?.toLowerCase().includes(q) ||
-      c.rol?.toLowerCase().includes(q) ||
-      c.herramientas?.some(t => t.toLowerCase().includes(q)) ||
-      c.area?.toLowerCase().includes(q)
-  })
+  const filtered = colleagues
+    .filter(c => {
+      const q = search.toLowerCase()
+      return !q ||
+        c.nombre?.toLowerCase().includes(q) ||
+        c.rol?.toLowerCase().includes(q) ||
+        c.herramientas?.some(t => t.toLowerCase().includes(q)) ||
+        c.area?.toLowerCase().includes(q)
+    })
+    .sort((a, b) => (b.id === myColleagueId ? 1 : 0) - (a.id === myColleagueId ? 1 : 0))
 
   const userInitial = user?.displayName?.charAt(0)?.toUpperCase() || user?.email?.charAt(0)?.toUpperCase() || "?"
 
@@ -134,7 +142,7 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-1.5">
           <span data-tour="bell">
-            <NotificationBell isAdmin={isAdmin} myColleagueId={myColleagueId} userEmail={user?.email} />
+            <NotificationBell isAdmin={isAdmin} myColleagueId={myColleagueId} userEmail={user?.email} userUid={user?.uid} />
           </span>
           <ThemeToggle />
           <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold select-none cursor-default"
@@ -318,7 +326,7 @@ export default function Dashboard() {
           /* ── Cards grid ── */
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-tour="cards">
             {filtered.map((c) => {
-              const h = hashHue(c.id)
+              const h = c.colorHue ?? hashHue(c.id)
               const isHovered = hoveredId === c.id
               return (
                 <a key={c.id} href={`/colleague/${c.id}`}
@@ -345,9 +353,14 @@ export default function Dashboard() {
                     {/* Avatar + Name + Role */}
                     <div className="flex items-start gap-3">
                       <div className="relative flex-shrink-0">
-                        <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-[16px]"
-                          style={{ background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))` }}>
-                          {c.nombre?.charAt(0).toUpperCase()}
+                        <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-[16px] overflow-hidden"
+                          style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))` }}>
+                          {c.avatarUrl
+                            ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                            : c.avatarEmoji
+                              ? <span className="text-xl leading-none">{c.avatarEmoji}</span>
+                              : c.nombre?.charAt(0).toUpperCase()
+                          }
                         </div>
                         <div className="absolute -inset-1.5 rounded-xl -z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
                           style={{ background: `oklch(0.62 0.18 ${h} / 0.28)`, filter: "blur(10px)" }} />
@@ -502,68 +515,55 @@ export default function Dashboard() {
                   ))}
                 </div>
 
-                {/* Miembros actuales con X */}
+                {/* Lista unificada: todos los compañeros, toggleable */}
                 {(() => {
-                  const miembros = (editingEquipo.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
-                  const noMiembros = colleagues.filter(c => !(editingEquipo.miembros || []).includes(c.id))
+                  const liveEquipo = equipos.find(e => e.id === editingEquipo.id) || editingEquipo
+                  const memberIds = new Set(liveEquipo.miembros || [])
+                  const memberCount = colleagues.filter(c => memberIds.has(c.id)).length
                   return (
-                    <>
-                      <div>
-                        <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">
-                          Miembros ({miembros.length})
-                        </p>
-                        {miembros.length === 0
-                          ? <p className="text-[12px] text-muted-foreground italic">Sin miembros aún.</p>
-                          : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                              {miembros.map(c => {
-                                const ch = hashHue(c.id)
-                                return (
-                                  <div key={c.id} className="flex items-center gap-3 p-3 rounded-xl border border-border"
-                                    style={{ background: `linear-gradient(135deg, var(--card), oklch(0.60 0.14 ${ch}/0.05))`, borderLeft: `3px solid oklch(0.62 0.18 ${ch})` }}>
-                                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-[12px] flex-shrink-0"
-                                      style={{ background: `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}>
-                                      {c.nombre?.charAt(0).toUpperCase()}
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                      <p className="text-[12px] font-semibold text-foreground truncate">{c.nombre?.split(" ").slice(0,2).join(" ")}</p>
-                                      <p className="text-[10px] text-muted-foreground truncate">{c.rol || "Sin rol"}</p>
-                                    </div>
-                                    <button onClick={() => handleToggleMember(editingEquipo.id, c.id)}
-                                      className="w-6 h-6 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors flex-shrink-0">
-                                      <X size={12} />
-                                    </button>
-                                  </div>
-                                )
-                              })}
-                            </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">
+                        Compañeros — {memberCount} en el grupo
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {colleagues.map(c => {
+                          const ch = c.colorHue ?? hashHue(c.id)
+                          const isMember = memberIds.has(c.id)
+                          return (
+                            <button key={c.id}
+                              onClick={() => handleToggleMember(editingEquipo.id, c.id)}
+                              title={isMember ? `Quitar a ${c.nombre}` : `Agregar a ${c.nombre}`}
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-all"
+                              style={isMember ? {
+                                borderColor: `oklch(0.62 0.18 ${ch})`,
+                                background: `oklch(0.62 0.18 ${ch} / 0.12)`,
+                                color: "var(--foreground)",
+                              } : {
+                                borderColor: "var(--border)",
+                                background: "transparent",
+                                color: "var(--muted-foreground)",
+                              }}>
+                              <div className="w-5 h-5 rounded flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0 overflow-hidden"
+                                style={{ background: c.avatarUrl ? "var(--muted)" : `oklch(0.68 0.18 ${ch})` }}>
+                                {c.avatarUrl
+                                  ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                                  : c.avatarEmoji
+                                    ? <span className="text-xs leading-none">{c.avatarEmoji}</span>
+                                    : c.nombre?.charAt(0).toUpperCase()
+                                }
+                              </div>
+                              <span className="font-medium">{c.nombre?.split(" ").slice(0,2).join(" ")}</span>
+                              {c.rol && <span className="text-[10px] opacity-50">· {c.rol.split(" ")[0]}</span>}
+                              {isMember
+                                ? <X size={11} className="ml-0.5 flex-shrink-0" style={{ color: "oklch(0.60 0.18 27)" }} />
+                                : <Plus size={10} className="ml-0.5 opacity-40 flex-shrink-0" />
+                              }
+                            </button>
                           )
-                        }
+                        })}
                       </div>
-                      {noMiembros.length > 0 && (
-                        <div>
-                          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Agregar al grupo</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {noMiembros.map(c => {
-                              const ch = hashHue(c.id)
-                              return (
-                                <button key={c.id} onClick={() => handleToggleMember(editingEquipo.id, c.id)}
-                                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 hover:bg-muted/50 transition-all">
-                                  <div className="w-5 h-5 rounded flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
-                                    style={{ background: `oklch(0.68 0.18 ${ch})` }}>
-                                    {c.nombre?.charAt(0).toUpperCase()}
-                                  </div>
-                                  <span>{c.nombre?.split(" ").slice(0,2).join(" ")}</span>
-                                  {c.rol && <span className="text-[10px] opacity-50">· {c.rol.split(" ")[0]}</span>}
-                                  <Plus size={10} className="opacity-40" />
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )
+                    </div>
+                   )
                 })()}
 
                 <div className="flex gap-2 pt-1 border-t border-border">
@@ -576,15 +576,20 @@ export default function Dashboard() {
             )}
 
             {/* Grid de grupos — estilo Mi equipo */}
-            {equipos.length === 0 && !showEquipoForm && !editingEquipo ? (
+            {(() => {
+              const visibleEquipos = isAdmin
+                ? equipos
+                : equipos.filter(eq => eq.memberUids?.includes(user?.uid))
+              const emptyMsg = isAdmin ? "Crea el primero con el botón de arriba." : "Pídele al admin o a un compañero que te agregue."
+              return visibleEquipos.length === 0 && !showEquipoForm && !editingEquipo ? (
               <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
                 <Users size={32} className="mb-3 opacity-30" />
-                <p className="font-semibold text-foreground text-[15px]">Sin grupos creados</p>
-                <p className="text-[13px] mt-1">Crea el primero con el botón de arriba.</p>
+                <p className="font-semibold text-foreground text-[15px]">Sin grupos</p>
+                <p className="text-[13px] mt-1">{emptyMsg}</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {equipos.map(eq => {
+                {visibleEquipos.map(eq => {
                   const eqColor = eq.color || "295"
                   const miembros = (eq.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
                   const isActive = editingEquipo?.id === eq.id
@@ -628,13 +633,18 @@ export default function Dashboard() {
                           <div className="flex items-center gap-1.5 mb-3">
                             <div className="flex -space-x-2">
                               {miembros.slice(0, 5).map(c => {
-                                const ch = hashHue(c.id)
+                                const ch = c.colorHue ?? hashHue(c.id)
                                 return (
                                   <div key={c.id}
-                                    className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0"
-                                    style={{ background: `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}
+                                    className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0 overflow-hidden"
+                                    style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}
                                     title={c.nombre}>
-                                    {c.nombre?.charAt(0).toUpperCase()}
+                                    {c.avatarUrl
+                                      ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                                      : c.avatarEmoji
+                                        ? <span className="text-sm leading-none">{c.avatarEmoji}</span>
+                                        : c.nombre?.charAt(0).toUpperCase()
+                                    }
                                   </div>
                                 )
                               })}
@@ -656,13 +666,18 @@ export default function Dashboard() {
                             <p className="text-[12px] text-muted-foreground italic">Sin miembros. Usa el lápiz para agregar.</p>
                           ) : (
                             miembros.map(c => {
-                              const ch = hashHue(c.id)
+                              const ch = c.colorHue ?? hashHue(c.id)
                               return (
                                 <a key={c.id} href={`/colleague/${c.id}`} onClick={e => e.stopPropagation()}
                                   className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-muted/60 transition-colors group">
-                                  <div className="w-6 h-6 rounded flex items-center justify-center text-white font-bold text-[10px] flex-shrink-0"
-                                    style={{ background: `oklch(0.68 0.18 ${ch})` }}>
-                                    {c.nombre?.charAt(0).toUpperCase()}
+                                  <div className="w-6 h-6 rounded flex items-center justify-center text-white font-bold text-[10px] flex-shrink-0 overflow-hidden"
+                                    style={{ background: c.avatarUrl ? "var(--muted)" : `oklch(0.68 0.18 ${ch})` }}>
+                                    {c.avatarUrl
+                                      ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                                      : c.avatarEmoji
+                                        ? <span className="text-xs leading-none">{c.avatarEmoji}</span>
+                                        : c.nombre?.charAt(0).toUpperCase()
+                                    }
                                   </div>
                                   <span className="text-[12px] font-medium text-foreground truncate flex-1">
                                     {c.nombre?.split(" ").slice(0,2).join(" ")}
@@ -679,7 +694,8 @@ export default function Dashboard() {
                   )
                 })}
               </div>
-            )}
+            )
+            })()}
           </div>
         )}
 
