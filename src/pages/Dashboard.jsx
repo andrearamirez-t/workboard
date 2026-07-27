@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { getColleagues } from "@/services/colleagues.service"
@@ -6,14 +6,16 @@ import { getAllLogs } from "@/services/logs.service"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
-import { UserCircle, Search, Users, BarChart2, Plus, Pencil, Trash2, X } from "lucide-react"
+import { UserCircle, Search, Users, BarChart2, Plus, Pencil, Trash2, X, Upload } from "lucide-react"
 import { NotificationBell } from "@/components/ui/NotificationBell"
 import { Tutorial, resetTutorial } from "@/components/ui/Tutorial"
 import { MetricsDashboard } from "@/components/ui/MetricsDashboard"
 import { TeamDashboard } from "@/components/ui/TeamDashboard"
 import { getEquipos, createEquipo, updateEquipo, deleteEquipo } from "@/services/equipos.service"
-import { queueGrupoNotification } from "@/services/wpp.service"
+import { queueGrupoNotification, queueParticipanteGrupoNotification } from "@/services/wpp.service"
 import { crearNotificacionUsuario } from "@/services/notificaciones.service"
+import { importGroupContacts, getGroupContactsCount } from "@/services/groups.service"
+import { parseContactsFile } from "@/utils/parseContactsFile"
 
 const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
@@ -36,10 +38,22 @@ export default function Dashboard() {
   const [logs, setLogs] = useState([])
   // Equipos state
   const [equipos, setEquipos] = useState([])
-  const [equipoForm, setEquipoForm] = useState({ nombre: "", descripcion: "", color: "295" })
+  const [equipoForm, setEquipoForm] = useState({ nombre: "", descripcion: "", color: "295", esPrueba: false })
   const [showEquipoForm, setShowEquipoForm] = useState(false)
   const [editingEquipo, setEditingEquipo] = useState(null)
   const [savingEquipo, setSavingEquipo] = useState(false)
+
+  const [participantCounts, setParticipantCounts] = useState({})
+
+  // Importar participantes
+  const contactsInputRef = useRef(null)
+  const importingEquipoIdRef = useRef(null)
+  const [importPreview, setImportPreview] = useState(null)
+  const [importingEquipoId, setImportingEquipoId] = useState(null)
+  const [importLoading, setImportLoading] = useState(false)
+  const [importError, setImportError] = useState("")
+  const [importSaving, setImportSaving] = useState(false)
+  const [importSuccessCount, setImportSuccessCount] = useState(null)
 
   useEffect(() => {
     if (!user) return
@@ -49,22 +63,83 @@ export default function Dashboard() {
       setLogs(ls)
       setEquipos(eqs)
       setLoadingData(false)
+      // Cargar conteo de participantes por grupo en paralelo
+      if (ADMIN_EMAILS.includes(user.email)) {
+        Promise.all(eqs.map(eq => getGroupContactsCount(eq.id).then(n => [eq.id, n]).catch(() => [eq.id, 0])))
+          .then(pairs => setParticipantCounts(Object.fromEntries(pairs)))
+      }
     })
   }, [user])
 
-  const reloadEquipos = () => getEquipos().then(setEquipos)
+  const reloadEquipos = () => getEquipos().then(eqs => {
+    setEquipos(eqs)
+    if (ADMIN_EMAILS.includes(user?.email)) {
+      Promise.all(eqs.map(eq => getGroupContactsCount(eq.id).then(n => [eq.id, n]).catch(() => [eq.id, 0])))
+        .then(pairs => setParticipantCounts(Object.fromEntries(pairs)))
+    }
+  })
+
+  const handleContactsFileSelected = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    setImportError("")
+    setImportLoading(true)
+    try {
+      const parsed = await parseContactsFile(file)
+      setImportPreview(parsed)
+    } catch (err) {
+      setImportError(err.message)
+    } finally {
+      setImportLoading(false)
+    }
+  }
+
+  const handleConfirmImport = async () => {
+    const equipoId = importingEquipoIdRef.current
+    const total = importPreview?.length
+    if (!total || !equipoId) {
+      setImportError(`No se pudo obtener el ID del grupo (${equipoId || "vacío"}). Intenta de nuevo.`)
+      return
+    }
+    setImportSaving(true)
+    setImportError("")
+    try {
+      await importGroupContacts(equipoId, importPreview, user?.email)
+      // Encolar notificaciones WhatsApp si el grupo NO es de prueba
+      const grupo = equipos.find(e => e.id === equipoId)
+      if (grupo && !grupo.esPrueba) {
+        importPreview.forEach(contacto =>
+          queueParticipanteGrupoNotification({ contacto, grupo }).catch(() => {})
+        )
+      }
+      setImportSuccessCount(total)
+      setImportPreview(null)
+      setTimeout(() => {
+        setImportingEquipoId(null)
+        setImportSuccessCount(null)
+        importingEquipoIdRef.current = null
+      }, 2500)
+    } catch (err) {
+      console.error("Error importando contactos:", err)
+      setImportError(`Error al guardar: ${err?.message || "permisos insuficientes. Verifica que estés como admin."}`)
+    } finally {
+      setImportSaving(false)
+    }
+  }
 
   const handleSaveEquipo = async () => {
     if (!equipoForm.nombre.trim()) return
     setSavingEquipo(true)
     try {
       if (editingEquipo) {
-        await updateEquipo(editingEquipo.id, { nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color })
+        await updateEquipo(editingEquipo.id, { nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color, esPrueba: !!equipoForm.esPrueba })
       } else {
         await createEquipo({
           nombre: equipoForm.nombre.trim(),
           descripcion: equipoForm.descripcion.trim(),
           color: equipoForm.color,
+          esPrueba: !!equipoForm.esPrueba,
           miembros: myColleagueId ? [myColleagueId] : [],
           memberUids: user?.uid ? [user.uid] : [],
         })
@@ -507,7 +582,16 @@ export default function Dashboard() {
             {editingEquipo && (
               <div className="bg-card border border-border rounded-2xl p-5 space-y-4"
                 style={{ borderLeft: `3px solid oklch(0.62 0.22 ${equipoForm.color || "295"})` }}>
-                <p className="text-[13px] font-semibold text-foreground">Editando: {editingEquipo.nombre}</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-[13px] font-semibold text-foreground">Editando: {editingEquipo.nombre}</p>
+                  <button
+                    onClick={() => { importingEquipoIdRef.current = editingEquipo.id; setImportingEquipoId(editingEquipo.id); setImportPreview(null); setImportError(""); contactsInputRef.current?.click() }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all hover:brightness-110 active:scale-95"
+                    style={{ background: `oklch(0.62 0.20 ${equipoForm.color || "295"})`, color: "#fff", boxShadow: `0 2px 8px oklch(0.52 0.20 ${equipoForm.color || "295"} / 35%)` }}>
+                    <Upload size={12} />
+                    Importar participantes
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <input placeholder="Nombre *" value={equipoForm.nombre}
                     onChange={e => setEquipoForm(f => ({ ...f, nombre: e.target.value }))}
@@ -576,6 +660,15 @@ export default function Dashboard() {
                    )
                 })()}
 
+                <div className="flex items-center gap-2 pt-1">
+                  <input type="checkbox" id="esPrueba" checked={!!equipoForm.esPrueba}
+                    onChange={e => setEquipoForm(f => ({ ...f, esPrueba: e.target.checked }))}
+                    className="w-4 h-4 accent-amber-500" />
+                  <label htmlFor="esPrueba" className="text-[12px] text-muted-foreground cursor-pointer select-none">
+                    Grupo de prueba — <span className="text-amber-500 font-medium">no enviar notificaciones de WhatsApp</span>
+                  </label>
+                </div>
+
                 <div className="flex gap-2 pt-1 border-t border-border">
                   <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
                     {savingEquipo ? "Guardando…" : "Guardar cambios"}
@@ -627,7 +720,7 @@ export default function Dashboard() {
                             )}
                           </div>
                           <div className="flex gap-2 ml-2 flex-shrink-0">
-                            <button onClick={e => { e.stopPropagation(); setEditingEquipo(eq); setEquipoForm({ nombre: eq.nombre, descripcion: eq.descripcion || "", color: eq.color || "295" }); setShowEquipoForm(false) }}
+                            <button onClick={e => { e.stopPropagation(); setEditingEquipo(eq); setEquipoForm({ nombre: eq.nombre, descripcion: eq.descripcion || "", color: eq.color || "295", esPrueba: !!eq.esPrueba }); setShowEquipoForm(false) }}
                               className="text-[11px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5">
                               <Pencil size={11} />
                             </button>
@@ -665,8 +758,14 @@ export default function Dashboard() {
                               )}
                             </div>
                             <span className="text-[11px] text-muted-foreground ml-1">
-                              {miembros.length} miembro{miembros.length !== 1 ? "s" : ""}
+                              {miembros.length} en la plataforma
                             </span>
+                            {(participantCounts[eq.id] || eq.participantesCount || 0) > 0 && (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                                style={{ background: `oklch(0.62 0.18 ${eqColor} / 0.13)`, color: `oklch(0.48 0.20 ${eqColor})` }}>
+                                {participantCounts[eq.id] ?? eq.participantesCount} participantes
+                              </span>
+                            )}
                           </div>
                         )}
 
@@ -710,6 +809,114 @@ export default function Dashboard() {
         )}
 
       </main>
+
+      {/* ── Import contacts modal ── */}
+      {(importPreview || importLoading || importError || importSuccessCount != null) && importingEquipoId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "oklch(0 0 0 / 50%)", backdropFilter: "blur(4px)" }}>
+          <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <div>
+                <p className="font-semibold text-foreground text-[15px]">Importar participantes</p>
+                <p className="text-[12px] text-muted-foreground">
+                  {equipos.find(e => e.id === importingEquipoId)?.nombre || "Grupo"}
+                </p>
+              </div>
+              <button onClick={() => { setImportPreview(null); setImportingEquipoId(null); setImportError(""); setImportSuccessCount(null) }}
+                className="text-muted-foreground hover:text-foreground transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-3">
+              {/* Éxito */}
+              {importSuccessCount != null && (
+                <div className="flex flex-col items-center justify-center py-8 gap-3">
+                  <div className="w-14 h-14 rounded-full flex items-center justify-center text-2xl"
+                    style={{ background: "oklch(0.55 0.18 145 / 0.15)" }}>
+                    ✓
+                  </div>
+                  <p className="font-semibold text-foreground text-[15px]">¡Importación exitosa!</p>
+                  <p className="text-[13px] text-muted-foreground">
+                    Se guardaron <span className="font-bold text-foreground">{importSuccessCount}</span> participantes en el grupo.
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">Puedes verlos entrando al grupo → Participantes</p>
+                </div>
+              )}
+              {importLoading && (
+                <p className="text-[13px] text-muted-foreground text-center py-6">Leyendo archivo…</p>
+              )}
+              {importError && (
+                <p className="text-[13px] text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{importError}</p>
+              )}
+              {importPreview && (
+                <>
+                  <p className="text-[13px] text-muted-foreground">
+                    Se encontraron <span className="font-semibold text-foreground">{importPreview.length}</span> participantes. Vista previa (primeros 5):
+                  </p>
+                  <div className="overflow-x-auto rounded-xl border border-border max-h-64 overflow-y-auto">
+                    <table className="w-full text-[12px]">
+                      <thead className="sticky top-0">
+                        <tr className="border-b border-border bg-muted/80 backdrop-blur-sm">
+                          <th className="text-left px-3 py-2 font-semibold text-muted-foreground">Nombre</th>
+                          <th className="text-left px-3 py-2 font-semibold text-muted-foreground">Teléfono</th>
+                          <th className="text-left px-3 py-2 font-semibold text-muted-foreground">Correo</th>
+                          <th className="px-2 py-2" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importPreview.map((c, i) => (
+                          <tr key={i} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                            <td className="px-3 py-2 text-foreground">{c.nombre || "—"}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{c.telefono || "—"}</td>
+                            <td className="px-3 py-2 text-muted-foreground truncate max-w-[160px]">{c.correo || "—"}</td>
+                            <td className="px-2 py-2">
+                              <button
+                                onClick={() => setImportPreview(prev => prev.filter((_, j) => j !== i))}
+                                className="text-muted-foreground hover:text-destructive transition-colors"
+                                title="Quitar">
+                                <X size={13} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {importPreview && (
+              <div className="px-5 py-4 border-t border-border flex gap-2 justify-between items-center">
+                <span className="text-[12px] text-muted-foreground">
+                  {importPreview.length === 0
+                    ? "Lista vacía — agrega un archivo o cancela"
+                    : `${importPreview.length} contacto${importPreview.length !== 1 ? "s" : ""} listos para importar`}
+                </span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline"
+                    onClick={() => { setImportPreview(null); setImportingEquipoId(null); setImportError("") }}>
+                    Cancelar
+                  </Button>
+                  <Button size="sm" onClick={handleConfirmImport} disabled={importSaving || importPreview.length === 0}>
+                    {importSaving ? "Guardando…" : `Importar ${importPreview.length}`}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Hidden file input for contacts import */}
+      <input
+        ref={contactsInputRef}
+        type="file"
+        accept=".csv,.xls,.xlsx"
+        className="hidden"
+        onChange={handleContactsFileSelected}
+      />
 
       <Footer />
       <Tutorial

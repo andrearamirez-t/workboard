@@ -157,3 +157,37 @@ export const deleteGrupoFeedback = async (grupoId, fbId) => {
 export const updateGrupoFeedback = async (grupoId, fbId, texto) => {
   return await updateDoc(doc(db, "equipos", grupoId, "retroalimentacion", fbId), { texto })
 }
+
+// ── Contactos importados (subcollection) ──────────────────────────────────
+export const importGroupContacts = async (grupoId, contactos, agregadoPor) => {
+  const col = collection(db, "equipos", grupoId, "contactos")
+  const promises = contactos.map(c =>
+    addDoc(col, { ...c, agregadoPor, agregadoEn: serverTimestamp() })
+  )
+  await Promise.all(promises)
+  // Guardar conteo en el documento del equipo para mostrarlo en el Dashboard
+  const snap = await getDocs(collection(db, "equipos", grupoId, "contactos"))
+  await updateDoc(doc(db, "equipos", grupoId), { participantesCount: snap.size })
+}
+
+export const getGroupContactsCount = async (grupoId) => {
+  const snap = await getDocs(collection(db, "equipos", grupoId, "contactos"))
+  return snap.size
+}
+
+export const getGroupContacts = async (grupoId) => {
+  const snap = await getDocs(query(collection(db, "equipos", grupoId, "contactos"), orderBy("agregadoEn", "desc")))
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+}
+
+export const deleteGroupContact = async (grupoId, contactId) => {
+  await deleteDoc(doc(db, "equipos", grupoId, "contactos", contactId))
+  const snap = await getDocs(collection(db, "equipos", grupoId, "contactos"))
+  await updateDoc(doc(db, "equipos", grupoId), { participantesCount: snap.size })
+}
+
+export const deleteAllGroupContacts = async (grupoId) => {
+  const snap = await getDocs(collection(db, "equipos", grupoId, "contactos"))
+  await Promise.all(snap.docs.map(d => deleteDoc(d.ref)))
+  await updateDoc(doc(db, "equipos", grupoId), { participantesCount: 0 })
+}

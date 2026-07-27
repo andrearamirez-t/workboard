@@ -10,7 +10,7 @@ import { addFeedback, getFeedback, deleteFeedback, updateFeedback } from "@/serv
 import { addTask, getTasks, updateTask, updateTaskStatus, deleteTask, updateTaskAvance, addTaskFile, removeTaskFile, solicitarPlazoTask, cancelarPlazoTask, aceptarPlazoTask, rechazarPlazoTask, dismissPlazoResultadoTask } from "@/services/tasks.service"
 import { notificarTareaCompletada, crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { queueTareaNotification } from "@/services/wpp.service"
-import { uploadDocument, getDocuments, deleteDocument, uploadTaskFile, deleteTaskFile, MAX_FILE_SIZE } from "@/services/storage.service"
+import { uploadTaskFile, deleteTaskFile, MAX_FILE_SIZE } from "@/services/storage.service"
 import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
@@ -46,11 +46,11 @@ function deadlineStatus(fechaEntrega) {
 }
 
 const PROJECT_STATE_STYLE = {
-  "Planificación": { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.12)" },
-  "En desarrollo": { color: "oklch(0.60 0.18 290)", bg: "oklch(0.60 0.18 290 / 0.12)" },
-  "En revisión":   { color: "oklch(0.68 0.18 55)",  bg: "oklch(0.68 0.18 55 / 0.12)"  },
-  "Completado":    { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" },
-  "Pausado":       { color: "oklch(0.55 0.04 270)", bg: "oklch(0.55 0.04 270 / 0.12)" },
+  "Formulación":   { color: "oklch(0.62 0.18 260)", bg: "oklch(0.62 0.18 260 / 0.12)" },
+  "En ejecución":  { color: "oklch(0.60 0.18 290)", bg: "oklch(0.60 0.18 290 / 0.12)" },
+  "En evaluación": { color: "oklch(0.68 0.18 55)",  bg: "oklch(0.68 0.18 55 / 0.12)"  },
+  "Finalizado":    { color: "oklch(0.60 0.18 145)", bg: "oklch(0.60 0.18 145 / 0.12)" },
+  "Suspendido":    { color: "oklch(0.55 0.04 270)", bg: "oklch(0.55 0.04 270 / 0.12)" },
 }
 
 const VERSION_STATE_STYLE = {
@@ -80,6 +80,18 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const ESTADO_AVANCE = {
+  "Formulación": 10,
+  "En ejecución": 50,
+  "En evaluación": 80,
+  "Finalizado": 100,
+  "Suspendido": 0,
+}
+
+function getAvance(proyecto) {
+  return ESTADO_AVANCE[proyecto.estado] ?? 0
 }
 
 export default function ColleagueDetail() {
@@ -130,12 +142,6 @@ export default function ColleagueDetail() {
   const [taskFileProgress, setTaskFileProgress] = useState(null)
   const [taskFileError, setTaskFileError] = useState("")
 
-  const [documents, setDocuments] = useState([])
-  const [uploadProgress, setUploadProgress] = useState(null)
-  const [uploadError, setUploadError] = useState("")
-  const [uploadingForProject, setUploadingForProject] = useState(null)
-  const [openDocProjects, setOpenDocProjects] = useState(new Set())
-  const fileInputRef = useRef(null)
   const taskFileInputRef = useRef(null)
   const uploadingTaskIdRef = useRef(null)
 
@@ -156,10 +162,6 @@ export default function ColleagueDetail() {
 
   useEffect(() => {
     if (isOwn || isAdmin) getTasks(id).then(setTasks)
-  }, [id, isOwn, isAdmin])
-
-  useEffect(() => {
-    if (isOwn || isAdmin) getDocuments(id).then(setDocuments)
   }, [id, isOwn, isAdmin])
 
   const handleAddTask = async (e) => {
@@ -195,43 +197,6 @@ export default function ColleagueDetail() {
       console.error("[Workboard] Error creando tarea:", err.code, err.message)
     }
     setSavingTask(false)
-  }
-
-  const handleFileSelected = async (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    e.target.value = ""
-    if (file.size > MAX_FILE_SIZE) {
-      setUploadError("El archivo supera el límite de 15 MB.")
-      return
-    }
-    setUploadError("")
-    setUploadProgress(0)
-    try {
-      const newDoc = await uploadDocument(id, file, {
-        onProgress: setUploadProgress,
-        uploadedBy: user?.email,
-        uploadedByName: user?.displayName || user?.email,
-        proyectoNombre: uploadingForProject,
-      })
-      setDocuments(prev => [newDoc, ...prev])
-    } catch (err) {
-      console.error("[Workboard] Error subiendo documento:", err)
-      setUploadError("Error al subir el archivo. Intenta de nuevo.")
-    } finally {
-      setUploadProgress(null)
-      setUploadingForProject(null)
-    }
-  }
-
-  const handleDeleteDoc = async (docId, storagePath) => {
-    if (!window.confirm("¿Eliminar este documento? Esta acción no se puede deshacer.")) return
-    try {
-      await deleteDocument(id, docId, storagePath)
-      setDocuments(prev => prev.filter(d => d.id !== docId))
-    } catch (err) {
-      console.error("[Workboard] Error eliminando documento:", err)
-    }
   }
 
   const handleUpdateTaskStatus = async (taskId, nuevoEstado) => {
@@ -651,7 +616,7 @@ export default function ColleagueDetail() {
 
           {(() => {
             const q = projectSearch.toLowerCase()
-            const filtered = (companero.proyectos || []).filter(p =>
+            const filtered = [...(companero.proyectos || [])].reverse().filter(p =>
               !q ||
               p.nombre?.toLowerCase().includes(q) ||
               p.queHace?.toLowerCase().includes(q) ||
@@ -744,31 +709,30 @@ export default function ColleagueDetail() {
                         </div>
                       )}
 
-                      {/* Avance — solo admin y dueño */}
-                      {(isOwn || isAdmin) && (
-                        <div className="mb-2.5">
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">Avance</span>
-                            <span className="text-[12px] font-bold tabular-nums"
-                              style={{ color: (proyecto.avance ?? 0) >= 75 ? "oklch(0.60 0.18 145)" : (proyecto.avance ?? 0) >= 50 ? "oklch(0.60 0.18 260)" : (proyecto.avance ?? 0) >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)" }}>
-                              {proyecto.avance ?? 0}%
-                            </span>
+                      {/* Avance — derivado del estado del proyecto */}
+                      {(isOwn || isAdmin) && (() => {
+                        const av = getAvance(proyecto)
+                        const color = av >= 75 ? "oklch(0.60 0.18 145)" : av >= 50 ? "oklch(0.60 0.18 260)" : av >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)"
+                        const gradient = av >= 75
+                          ? "linear-gradient(90deg, oklch(0.55 0.18 145), oklch(0.62 0.20 155))"
+                          : av >= 50
+                            ? "linear-gradient(90deg, oklch(0.55 0.18 260), oklch(0.62 0.20 280))"
+                            : av >= 25
+                              ? "linear-gradient(90deg, oklch(0.60 0.18 55), oklch(0.68 0.20 65))"
+                              : "linear-gradient(90deg, oklch(0.60 0.22 27), oklch(0.65 0.22 35))"
+                        return (
+                          <div className="mb-2.5">
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">Avance</span>
+                              <span className="text-[12px] font-bold tabular-nums" style={{ color }}>{av}%</span>
+                            </div>
+                            <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "oklch(0.40 0.02 260 / 0.3)" }}>
+                              <div className="h-full rounded-full transition-all duration-700"
+                                style={{ width: `${av}%`, background: gradient }} />
+                            </div>
                           </div>
-                          <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "oklch(0.40 0.02 260 / 0.3)" }}>
-                            <div className="h-full rounded-full transition-all duration-700"
-                              style={{
-                                width: `${proyecto.avance ?? 0}%`,
-                                background: (proyecto.avance ?? 0) >= 75
-                                  ? "linear-gradient(90deg, oklch(0.55 0.18 145), oklch(0.62 0.20 155))"
-                                  : (proyecto.avance ?? 0) >= 50
-                                    ? "linear-gradient(90deg, oklch(0.55 0.18 260), oklch(0.62 0.20 280))"
-                                    : (proyecto.avance ?? 0) >= 25
-                                      ? "linear-gradient(90deg, oklch(0.60 0.18 55), oklch(0.68 0.20 65))"
-                                      : "linear-gradient(90deg, oklch(0.60 0.22 27), oklch(0.65 0.22 35))",
-                              }} />
-                          </div>
-                        </div>
-                      )}
+                        )
+                      })()}
 
                       {/* Content */}
                       {proyecto.queHace && (
@@ -852,80 +816,6 @@ export default function ColleagueDetail() {
                         </div>
                       )}
 
-                      {/* ── Archivos del proyecto ── */}
-                      {(isAdmin || isOwn) && (() => {
-                        const proyDocs = documents.filter(d => d.proyectoNombre === proyecto.nombre)
-                        const isOpen = openDocProjects.has(proyecto.nombre)
-                        const isUploading = uploadingForProject === proyecto.nombre && uploadProgress !== null
-                        return (
-                          <div className="mt-3 pt-3 border-t border-border">
-                            <div className="flex items-center justify-between">
-                              <button
-                                onClick={() => setOpenDocProjects(prev => {
-                                  const next = new Set(prev)
-                                  isOpen ? next.delete(proyecto.nombre) : next.add(proyecto.nombre)
-                                  return next
-                                })}
-                                className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
-                                <span>Archivos</span>
-                                {proyDocs.length > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                                    style={{ background: `oklch(0.60 0.14 ${pH} / 0.15)`, color: `oklch(0.60 0.14 ${pH})` }}>
-                                    {proyDocs.length}
-                                  </span>
-                                )}
-                                <span className="text-[10px] opacity-50 ml-0.5">{isOpen ? "▲" : "▼"}</span>
-                              </button>
-                              {(isAdmin || isOwn) && (
-                                <button
-                                  onClick={() => { setUploadingForProject(proyecto.nombre); fileInputRef.current?.click() }}
-                                  disabled={uploadProgress !== null}
-                                  className="text-[11px] font-semibold px-3 py-1 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
-                                  style={{ background: `oklch(0.55 0.16 ${pH})` }}>
-                                  {isUploading ? `${uploadProgress}%` : "↑ Subir"}
-                                </button>
-                              )}
-                            </div>
-                            {isUploading && (
-                              <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-2">
-                                <div className="h-full rounded-full transition-all"
-                                  style={{ width: `${uploadProgress}%`, background: `oklch(0.55 0.16 ${pH})` }} />
-                              </div>
-                            )}
-                            {uploadingForProject === proyecto.nombre && uploadError && (
-                              <p className="text-[11px] text-destructive mt-1">{uploadError}</p>
-                            )}
-                            {isOpen && (
-                              <div className="mt-2 space-y-1.5">
-                                {proyDocs.length > 0 ? proyDocs.map(documento => {
-                                  const typeInfo = getFileTypeInfo(documento.tipo, documento.nombre)
-                                  return (
-                                    <div key={documento.id}
-                                      className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors">
-                                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded flex-shrink-0"
-                                        style={{ background: typeInfo.bg, color: typeInfo.color }}>
-                                        {typeInfo.label}
-                                      </span>
-                                      <span className="text-[12px] text-foreground truncate flex-1 min-w-0">{documento.nombre}</span>
-                                      <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(documento.size)}</span>
-                                      <button type="button" onClick={() => downloadFile(documento.url, documento.nombre)}
-                                        className="text-[14px] text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
-                                        title="Descargar">↓</button>
-                                      {(isAdmin || isOwn) && (
-                                        <button onClick={() => handleDeleteDoc(documento.id, documento.storagePath)}
-                                          className="text-[12px] text-muted-foreground hover:text-destructive transition-colors flex-shrink-0"
-                                          title="Eliminar">✕</button>
-                                      )}
-                                    </div>
-                                  )
-                                }) : (
-                                  <p className="text-[11px] text-muted-foreground text-center py-2">Sin archivos subidos aún.</p>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })()}
                     </div>
                   </div>
                 )
@@ -943,7 +833,6 @@ export default function ColleagueDetail() {
         <div>
           <h2 className="text-[18px] font-bold text-foreground tracking-tight mb-4">Bitácora</h2>
 
-          {/* Formulario: para el dueño del perfil o el admin */}
           {(isAdmin || isOwn) && (
             <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
               style={{ borderTopColor: `oklch(0.60 0.16 ${h})`, borderTopWidth: "3px" }}>
@@ -979,13 +868,9 @@ export default function ColleagueDetail() {
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
               </svg>
-              <input
-                type="text"
-                placeholder="Buscar en bitácora…"
-                value={logSearch}
+              <input type="text" placeholder="Buscar en bitácora…" value={logSearch}
                 onChange={e => setLogSearch(e.target.value)}
-                className="w-full h-9 bg-card border border-border rounded-xl pl-8 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30 transition-all"
-              />
+                className="w-full h-9 bg-card border border-border rounded-xl pl-8 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30 transition-all" />
             </div>
           )}
 
@@ -993,64 +878,64 @@ export default function ColleagueDetail() {
             const q = logSearch.toLowerCase()
             const filteredLogs = logs.filter(l => !q || l.nota?.toLowerCase().includes(q))
             return filteredLogs.length > 0 ? (
-            <div className="overflow-y-auto space-y-2 pr-0.5" style={{ maxHeight: "420px" }}>
-              {filteredLogs.map(log => (
-                <div key={log.id} className="bg-card border border-border rounded-xl p-4 group">
-                  {editingLogId === log.id ? (
-                    <div className="space-y-2">
-                      <textarea value={editingLogText} onChange={e => setEditingLogText(e.target.value)}
-                        rows={3}
-                        className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none" />
-                      <div className="flex gap-2">
-                        <button onClick={() => handleSaveEditLog(log.id)}
-                          className="text-[12px] font-semibold px-3.5 py-1.5 rounded-lg text-white"
-                          style={{ backgroundColor: `oklch(0.55 0.16 ${h})` }}>
-                          Guardar
-                        </button>
-                        <button onClick={() => setEditingLogId(null)}
-                          className="text-[12px] font-medium px-3.5 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors">
-                          Cancelar
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex gap-3">
-                      <div className="w-1.5 h-1.5 rounded-full mt-[7px] flex-shrink-0"
-                        style={{ backgroundColor: `oklch(0.62 0.16 ${h})` }} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[14px] text-foreground leading-relaxed">{log.nota}</p>
-                        <div className="flex justify-between items-center mt-1.5">
-                          <p className="text-[11px] text-muted-foreground capitalize">
-                            {log.createdAt?.toDate
-                              ? format(log.createdAt.toDate(), "EEEE d 'de' MMMM, yyyy", { locale: es })
-                              : ""}
-                          </p>
-                          {(isOwn || log.creadoPor === user?.uid || isAdmin) && (
-                            <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button onClick={() => handleStartEditLog(log)}
-                                className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
-                                style={{ color: `oklch(0.42 0.16 ${h})` }}>
-                                Editar
-                              </button>
-                              <button onClick={() => handleDeleteLog(log.id)}
-                                className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
-                                Eliminar
-                              </button>
-                            </div>
-                          )}
+              <div className="overflow-y-auto space-y-2 pr-0.5" style={{ maxHeight: "420px" }}>
+                {filteredLogs.map(log => (
+                  <div key={log.id} className="bg-card border border-border rounded-xl p-4 group">
+                    {editingLogId === log.id ? (
+                      <div className="space-y-2">
+                        <textarea value={editingLogText} onChange={e => setEditingLogText(e.target.value)}
+                          rows={3}
+                          className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[14px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none" />
+                        <div className="flex gap-2">
+                          <button onClick={() => handleSaveEditLog(log.id)}
+                            className="text-[12px] font-semibold px-3.5 py-1.5 rounded-lg text-white"
+                            style={{ backgroundColor: `oklch(0.55 0.16 ${h})` }}>
+                            Guardar
+                          </button>
+                          <button onClick={() => setEditingLogId(null)}
+                            className="text-[12px] font-medium px-3.5 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors">
+                            Cancelar
+                          </button>
                         </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-12 text-muted-foreground bg-card border border-border rounded-2xl">
-              <p className="text-[13px]">{logSearch ? "Sin resultados para esa búsqueda." : "Sin notas aún. Agrega la primera."}</p>
-            </div>
-          )
-        })()}
+                    ) : (
+                      <div className="flex gap-3">
+                        <div className="w-1.5 h-1.5 rounded-full mt-[7px] flex-shrink-0"
+                          style={{ backgroundColor: `oklch(0.62 0.16 ${h})` }} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[14px] text-foreground leading-relaxed">{log.nota}</p>
+                          <div className="flex justify-between items-center mt-1.5">
+                            <p className="text-[11px] text-muted-foreground capitalize">
+                              {log.createdAt?.toDate
+                                ? format(log.createdAt.toDate(), "EEEE d 'de' MMMM, yyyy", { locale: es })
+                                : ""}
+                            </p>
+                            {(isOwn || log.creadoPor === user?.uid || isAdmin) && (
+                              <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={() => handleStartEditLog(log)}
+                                  className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
+                                  style={{ color: `oklch(0.42 0.16 ${h})` }}>
+                                  Editar
+                                </button>
+                                <button onClick={() => handleDeleteLog(log.id)}
+                                  className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
+                                  Eliminar
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12 text-muted-foreground bg-card border border-border rounded-2xl">
+                <p className="text-[13px]">{logSearch ? "Sin resultados para esa búsqueda." : "Sin notas aún. Agrega la primera."}</p>
+              </div>
+            )
+          })()}
         </div>
 
         {/* ── Retroalimentación — solo admin y dueño del perfil ── */}
@@ -1678,10 +1563,6 @@ export default function ColleagueDetail() {
           </div>
         )}
 
-        {/* Input oculto para carga de archivos por proyecto */}
-        <input ref={fileInputRef} type="file"
-          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.png,.jpg,.jpeg"
-          className="hidden" onChange={handleFileSelected} />
         {/* Input oculto para archivos de tareas */}
         <input ref={taskFileInputRef} type="file"
           accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"

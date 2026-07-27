@@ -21,6 +21,26 @@ export const queueTareaNotification = async ({ colleague, tarea, asignadoPor }) 
   })
 }
 
+// Encola notificación a participante importado → n8n la recoge y envía por WhatsApp
+// Solo se ejecuta si el grupo NO está marcado como esPrueba
+export const queueParticipanteGrupoNotification = async ({ contacto, grupo }) => {
+  if (!contacto?.telefono || grupo?.esPrueba) return null
+  const tel = String(contacto.telefono).replace(/\D/g, "")
+  if (!tel) return null
+  return addDoc(collection(db, "wpp_queue"), {
+    tipo: "participante_grupo",
+    whatsapp: tel,
+    nombre: contacto.nombre || "",
+    correo: contacto.correo || "",
+    grupo: {
+      nombre: grupo.nombre || "",
+      descripcion: grupo.descripcion || "",
+    },
+    processed: false,
+    createdAt: serverTimestamp(),
+  })
+}
+
 // Encola notificación de ingreso a grupo → n8n la recoge y envía por WhatsApp
 export const queueGrupoNotification = async ({ colleague, grupo }) => {
   if (!colleague?.whatsapp) return null

@@ -9,6 +9,7 @@ import { useAuth } from "@/context/AuthContext"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
+import { extractPdfText, parseCunPdf } from "@/utils/parsePropuesta"
 
 function getFileTypeInfo(tipo, nombre) {
   const ext = (nombre || "").split(".").pop().toLowerCase()
@@ -36,7 +37,7 @@ const AREAS = [
   "Desarrollo de Software", "Robótica", "Inteligencia Artificial",
   "Infraestructura / DevOps", "Diseño UX/UI", "Investigación", "Soporte Técnico",
 ]
-const PROJECT_STATES = ["Planificación", "En desarrollo", "En revisión", "Completado", "Pausado"]
+const PROJECT_STATES = ["Formulación", "En ejecución", "En evaluación", "Finalizado", "Suspendido"]
 const VERSION_STATES = ["Pendiente", "En curso", "Entregado", "Cancelado"]
 
 export default function ProjectForm() {
@@ -49,9 +50,13 @@ export default function ProjectForm() {
 
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [pdfError, setPdfError] = useState(null)
+  const [pdfImported, setPdfImported] = useState(false)
 
   // Documentos
   const fileInputRef = useRef(null)
+  const pdfInputRef = useRef(null)
   const [documents, setDocuments] = useState([])
   const [uploadProgress, setUploadProgress] = useState(null)
   const [uploadError, setUploadError] = useState(null)
@@ -69,6 +74,40 @@ export default function ProjectForm() {
   })
 
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value })
+
+  const handlePdfImport = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    setPdfLoading(true)
+    setPdfError(null)
+    setPdfImported(false)
+    try {
+      const rawText = await extractPdfText(file)
+      const fields = parseCunPdf(rawText)
+      if (Object.keys(fields).length === 0) {
+        setPdfError("No se reconoció el formato de la propuesta. Verifica que sea un PDF del Asistente CUN.")
+        return
+      }
+      setForm(prev => ({
+        ...prev,
+        ...(fields.nombre       && { nombre: fields.nombre }),
+        ...(fields.area         && { area: fields.area }),
+        ...(fields.queHace      && { queHace: fields.queHace }),
+        ...(fields.herramientas && { herramientas: fields.herramientas }),
+        ...(fields.observaciones && { observaciones: fields.observaciones }),
+        ...(fields.fechaInicio  && { fechaInicio: fields.fechaInicio }),
+        ...(fields.fechaEntrega && { fechaEntrega: fields.fechaEntrega }),
+        ...(fields.versiones?.length && { versiones: fields.versiones }),
+      }))
+      setPdfImported(true)
+    } catch (err) {
+      console.error("[Workboard] Error parseando PDF:", err)
+      setPdfError("No se pudo leer el archivo. Asegúrate de que sea un PDF válido.")
+    } finally {
+      setPdfLoading(false)
+    }
+  }
 
   const addVersion = () => setForm(f => ({ ...f, versiones: [...f.versiones, { nombre: "", fecha: "", estado: "" }] }))
   const removeVersion = (i) => setForm(f => ({ ...f, versiones: f.versiones.filter((_, idx) => idx !== i) }))
@@ -133,7 +172,7 @@ export default function ProjectForm() {
     const proyecto = {
       nombre: form.nombre.trim(),
       estado: form.estado,
-      avance: Number(form.avance),
+      avance: 0,
       area: form.area.trim(),
       queHace: form.queHace.trim(),
       herramientas: form.herramientas.split(",").map(h => h.trim()).filter(Boolean),
@@ -184,6 +223,38 @@ export default function ProjectForm() {
           </p>
         </div>
 
+        {/* ── Importar desde PDF ── */}
+        <div className="rounded-2xl border border-border bg-card p-5 mb-6">
+          <div className="flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-lg"
+              style={{ background: "oklch(0.55 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>
+              ⬆
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[14px] font-semibold text-foreground">Importar desde PDF de propuesta</p>
+              <p className="text-[12px] text-muted-foreground mt-0.5">
+                Sube el PDF generado en el Asistente de Propuestas CUN y los campos se llenarán automáticamente.
+              </p>
+              {pdfError && (
+                <p className="text-[12px] text-destructive mt-1.5">{pdfError}</p>
+              )}
+              {pdfImported && (
+                <p className="text-[12px] mt-1.5 font-medium" style={{ color: "oklch(0.55 0.18 145)" }}>
+                  ✓ Datos importados correctamente. Revisa y ajusta si es necesario.
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => pdfInputRef.current?.click()}
+              disabled={pdfLoading}
+              className="flex-shrink-0 text-[12px] font-semibold px-4 py-2 rounded-xl border border-border text-foreground hover:border-primary/40 hover:bg-muted/60 disabled:opacity-50 transition-all"
+            >
+              {pdfLoading ? "Leyendo…" : "Seleccionar PDF"}
+            </button>
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit} className="space-y-4">
 
           {/* ── Sección: Identidad ── */}
@@ -203,38 +274,6 @@ export default function ProjectForm() {
                   <option value="">Sin estado</option>
                   {PROJECT_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[13px] font-medium text-foreground">Avance del proyecto</label>
-                <span className="text-[13px] font-bold tabular-nums"
-                  style={{ color: form.avance >= 75 ? "oklch(0.60 0.18 145)" : form.avance >= 50 ? "oklch(0.60 0.18 260)" : form.avance >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)" }}>
-                  {form.avance}%
-                </span>
-              </div>
-              {(() => {
-                const av = Number(form.avance)
-                const color = av >= 75 ? "oklch(0.60 0.18 145)" : av >= 50 ? "oklch(0.60 0.18 260)" : av >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)"
-                const track = `linear-gradient(to right, ${color} 0%, ${color} ${av}%, oklch(0.38 0.03 260 / 0.35) ${av}%, oklch(0.38 0.03 260 / 0.35) 100%)`
-                return (
-                  <>
-                    <style>{`
-                      .avance-range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--av-color); cursor: pointer; box-shadow: 0 0 0 3px oklch(0 0 0 / 0.25), 0 2px 6px oklch(0 0 0 / 0.35); transition: transform 0.1s; }
-                      .avance-range::-webkit-slider-thumb:hover { transform: scale(1.15); }
-                      .avance-range::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--av-color); cursor: pointer; border: none; box-shadow: 0 0 0 3px oklch(0 0 0 / 0.25); }
-                      .avance-range::-moz-range-track { background: oklch(0.38 0.03 260 / 0.35); border-radius: 999px; height: 8px; }
-                    `}</style>
-                    <input type="range" name="avance" min="0" max="100" step="5"
-                      value={form.avance} onChange={handleChange}
-                      className="avance-range w-full h-2 rounded-full appearance-none cursor-pointer"
-                      style={{ background: track, '--av-color': color }} />
-                  </>
-                )
-              })()}
-              <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
               </div>
             </div>
 
@@ -395,6 +434,13 @@ export default function ProjectForm() {
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"
         style={{ display: "none" }}
         onChange={handleFileSelected}
+      />
+      <input
+        ref={pdfInputRef}
+        type="file"
+        accept=".pdf"
+        style={{ display: "none" }}
+        onChange={handlePdfImport}
       />
     </div>
   )

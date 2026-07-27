@@ -14,7 +14,9 @@ import {
   addGrupoFeedback, getGrupoFeedback, deleteGrupoFeedback, updateGrupoFeedback,
   solicitarPlazoGrupoTask, aceptarPlazoGrupoTask, rechazarPlazoGrupoTask, dismissPlazoGrupoResultado,
   addGrupoTaskFile, removeGrupoTaskFile,
+  importGroupContacts, getGroupContacts, deleteGroupContact, deleteAllGroupContacts,
 } from "@/services/groups.service"
+import { parseContactsFile } from "@/utils/parseContactsFile"
 import { notificarTareaCompletada, crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { getColleagues, addProject } from "@/services/colleagues.service"
 import { uploadGroupDocument, getGroupDocuments, deleteGroupDocument, uploadGrupoTaskFile, deleteTaskFile, MAX_FILE_SIZE } from "@/services/storage.service"
@@ -70,7 +72,7 @@ export default function GroupDetail() {
   const [tasks, setTasks] = useState([])
   const [feedback, setFeedback] = useState([])
 
-  // Bitácora
+  //Bitácora
   const [nota, setNota] = useState("")
   const [savingLog, setSavingLog] = useState(false)
   const [editingLogId, setEditingLogId] = useState(null)
@@ -125,8 +127,17 @@ export default function GroupDetail() {
   const [editingFbId, setEditingFbId] = useState(null)
   const [editingFbText, setEditingFbText] = useState("")
 
+  // Contactos importados
+  const contactsInputRef = useRef(null)
+  const [contacts, setContacts] = useState([])
+  const [importPreview, setImportPreview] = useState(null)
+  const [importLoading, setImportLoading] = useState(false)
+  const [importError, setImportError] = useState("")
+  const [importSaving, setImportSaving] = useState(false)
+  const [contactSearch, setContactSearch] = useState("")
+
   // Secciones colapsables
-  const [openSections, setOpenSections] = useState({ proyectos: true, bitacora: true, tareas: true, feedback: true })
+  const [openSections, setOpenSections] = useState({ proyectos: true, bitacora: true, tareas: true, feedback: true, contactos: true })
   const toggleSection = (s) => setOpenSections(prev => ({ ...prev, [s]: !prev[s] }))
 
   const [loadingData, setLoadingData] = useState(true)
@@ -160,12 +171,63 @@ export default function GroupDetail() {
 
   useEffect(() => { loadAll() }, [id])
 
+  // Carga de contactos separada
+  useEffect(() => {
+    if (!id || !user) return
+    getGroupContacts(id)
+      .then(cts => setContacts(cts))
+      .catch(() => setContacts([]))
+  }, [id, user])
+
   const isMember = grupo && (grupo.miembros || []).some(cid => {
     const c = colleagues.find(col => col.id === cid)
     return c && (c.uid === user?.uid || c.email === user?.email)
   })
   const canAccess = isAdmin || isMember
   const canLog = isAdmin || isMember
+
+  // ── Importar contactos desde Excel/CSV ───────────────────────────────────
+  const handleContactsFileSelected = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    setImportError("")
+    setImportLoading(true)
+    try {
+      const parsed = await parseContactsFile(file)
+      setImportPreview(parsed)
+    } catch (err) {
+      setImportError(err.message)
+    } finally {
+      setImportLoading(false)
+    }
+  }
+
+  const handleConfirmImport = async () => {
+    if (!importPreview?.length) return
+    setImportSaving(true)
+    try {
+      await importGroupContacts(id, importPreview, user?.email)
+      const updated = await getGroupContacts(id)
+      setContacts(updated)
+      setImportPreview(null)
+    } catch (err) {
+      setImportError("Error al guardar los contactos. Intenta de nuevo.")
+    } finally {
+      setImportSaving(false)
+    }
+  }
+
+  const handleDeleteContact = async (contactId) => {
+    await deleteGroupContact(id, contactId)
+    setContacts(prev => prev.filter(c => c.id !== contactId))
+  }
+
+  const handleDeleteAllContacts = async () => {
+    if (!window.confirm(`¿Eliminar todos los contactos importados de este grupo?`)) return
+    await deleteAllGroupContacts(id)
+    setContacts([])
+  }
 
   // ── Documentos de grupo ───────────────────────────────────────────────────
   const handleFileSelected = async (e) => {
@@ -612,7 +674,13 @@ export default function GroupDetail() {
                       </div>
                     )}
                   </div>
-                  <span className="text-[12px] text-muted-foreground">{miembros.length} miembro{miembros.length !== 1 ? "s" : ""}</span>
+                  <span className="text-[12px] text-muted-foreground">{miembros.length} miembro{miembros.length !== 1 ? "s" : ""} en la plataforma</span>
+                  {contacts.length > 0 && (
+                    <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background: `oklch(0.62 0.18 ${hue} / 0.12)`, color: `oklch(0.50 0.20 ${hue})` }}>
+                      {contacts.length} participante{contacts.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -1450,6 +1518,136 @@ export default function GroupDetail() {
             )}
           </section>
 
+        {/* ── Sección: Participantes importados ── */}
+        {(isAdmin || isMember) && (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <button onClick={() => toggleSection("contactos")}
+                className="flex items-center gap-2 group">
+                <h2 className="text-[18px] font-bold text-foreground tracking-tight">Participantes</h2>
+                {contacts.length > 0 && (
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                    style={{ background: "oklch(0.60 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>
+                    {contacts.length}
+                  </span>
+                )}
+                {openSections.contactos ? <ChevronUp size={15} className="text-muted-foreground" /> : <ChevronDown size={15} className="text-muted-foreground" />}
+              </button>
+              <div className="flex gap-2">
+                {contacts.length > 0 && (
+                  <button onClick={handleDeleteAllContacts}
+                    className="text-[11px] font-semibold text-destructive/70 hover:text-destructive transition-colors">
+                    Limpiar todo
+                  </button>
+                )}
+                <button
+                  onClick={() => contactsInputRef.current?.click()}
+                  disabled={importLoading}
+                  className="text-[12px] font-semibold px-4 py-1.5 rounded-xl border border-border text-foreground hover:border-primary/40 hover:bg-muted/60 disabled:opacity-50 transition-all">
+                  {importLoading ? "Leyendo…" : "↑ Importar Excel / CSV"}
+                </button>
+              </div>
+            </div>
+
+            {importError && (
+              <p className="text-[12px] text-destructive">{importError}</p>
+            )}
+
+            {/* Preview antes de confirmar */}
+            {importPreview && (
+              <div className="rounded-2xl border border-border bg-card p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[13px] font-semibold text-foreground">
+                    Se importarán <span style={{ color: "oklch(0.55 0.18 145)" }}>{importPreview.length} contactos</span>
+                  </p>
+                  <button onClick={() => setImportPreview(null)}
+                    className="text-[11px] text-muted-foreground hover:text-foreground">✕ Cancelar</button>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-border">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/40">
+                        <th className="text-left px-3 py-2 font-semibold text-muted-foreground">Nombre</th>
+                        <th className="text-left px-3 py-2 font-semibold text-muted-foreground">Teléfono</th>
+                        <th className="text-left px-3 py-2 font-semibold text-muted-foreground">Correo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.slice(0, 5).map((c, i) => (
+                        <tr key={i} className="border-b border-border/50 last:border-0">
+                          <td className="px-3 py-2 text-foreground">{c.nombre || "—"}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{c.telefono || "—"}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{c.correo || "—"}</td>
+                        </tr>
+                      ))}
+                      {importPreview.length > 5 && (
+                        <tr><td colSpan={3} className="px-3 py-2 text-muted-foreground italic text-center">
+                          …y {importPreview.length - 5} más
+                        </td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <button onClick={handleConfirmImport} disabled={importSaving}
+                  className="text-[13px] font-bold px-5 py-2 rounded-xl text-white disabled:opacity-50 transition-all hover:opacity-90"
+                  style={{ background: "oklch(0.55 0.18 145)" }}>
+                  {importSaving ? "Guardando…" : `Confirmar importación (${importPreview.length})`}
+                </button>
+              </div>
+            )}
+
+            {/* Lista de contactos */}
+            {openSections.contactos && contacts.length > 0 && (
+              <>
+                <div className="relative">
+                  <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                  </svg>
+                  <input type="text" placeholder="Buscar participante…" value={contactSearch}
+                    onChange={e => setContactSearch(e.target.value)}
+                    className="w-full h-9 bg-card border border-border rounded-xl pl-8 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 transition-all" />
+                </div>
+                <div className="overflow-x-auto rounded-2xl border border-border">
+                  <table className="w-full text-[13px]">
+                    <thead>
+                      <tr className="border-b border-border bg-card">
+                        <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Nombre</th>
+                        <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Teléfono / WhatsApp</th>
+                        <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Correo</th>
+                        <th className="px-4 py-3" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {contacts
+                        .filter(c => {
+                          const q = contactSearch.toLowerCase()
+                          return !q || c.nombre?.toLowerCase().includes(q) || c.correo?.toLowerCase().includes(q) || c.telefono?.includes(q)
+                        })
+                        .map(c => (
+                          <tr key={c.id} className="border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors group">
+                            <td className="px-4 py-2.5 font-medium text-foreground">{c.nombre || "—"}</td>
+                            <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{c.telefono || "—"}</td>
+                            <td className="px-4 py-2.5 text-muted-foreground">{c.correo || "—"}</td>
+                            <td className="px-4 py-2.5 text-right">
+                              <button onClick={() => handleDeleteContact(c.id)}
+                                className="text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100">✕</button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {openSections.contactos && contacts.length === 0 && !importPreview && (
+              <div className="text-center py-10 text-muted-foreground bg-card border border-border rounded-2xl">
+                <p className="text-[13px]">Sin participantes importados. Sube un Excel o CSV con columnas: Nombre, Teléfono, Correo.</p>
+              </div>
+            )}
+          </section>
+        )}
+
       </main>
       <Footer />
 
@@ -1489,6 +1687,9 @@ export default function GroupDetail() {
         </div>
       )}
 
+      {/* Input oculto para importar participantes */}
+      <input ref={contactsInputRef} type="file" accept=".csv,.xls,.xlsx"
+        style={{ display: "none" }} onChange={handleContactsFileSelected} />
       {/* Input oculto para documentos de proyectos */}
       <input ref={fileInputRef} type="file"
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"

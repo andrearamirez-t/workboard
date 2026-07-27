@@ -110,6 +110,11 @@ service cloud.firestore {
         allow create: if isGrupoMemberOrAdmin(equipoId);
         allow delete: if isAdmin();
       }
+
+      match /contactos/{contactId} {
+        allow read: if isAdmin();
+        allow create, delete: if isAdmin();
+      }
     }
 
   }
