@@ -9,8 +9,14 @@ import { useState } from "react"
 import { FileDown, Sheet } from "lucide-react"
 
 const OKLCH_PALETTE = [
-  "#a78bfa", "#60a5fa", "#34d399", "#fb923c",
-  "#f472b6", "#facc15", "#38bdf8", "#4ade80",
+  "#1fa882",  // teal — chart-1 (primary)
+  "#7c52e0",  // violet — chart-2 (accent-secondary)
+  "#d4893a",  // amber — chart-3
+  "#4a80c7",  // blue — chart-4
+  "#c25060",  // rose — chart-5
+  "#34d399",  // emerald
+  "#a78bfa",  // lavender
+  "#fb923c",  // orange
 ]
 
 const labelStyle = { fontSize: 11, fill: "var(--muted-foreground)" }
@@ -31,7 +37,10 @@ function SectionTitle({ children }) {
 }
 
 function avanceColor(v) {
-  return v >= 75 ? "#4ade80" : v >= 50 ? "#60a5fa" : v >= 25 ? "#fb923c" : "#f87171"
+  if (v >= 75) return "#1fa882"  // success
+  if (v >= 50) return "#4a80c7"  // info
+  if (v >= 25) return "#d4893a"  // warning
+  return "#c25060"               // destructive
 }
 
 function avanceLabel(v) {

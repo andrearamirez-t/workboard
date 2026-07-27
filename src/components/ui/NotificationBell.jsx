@@ -197,15 +197,15 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
       >
         <Bell size={16} className={count > 0 ? "text-foreground" : "text-muted-foreground"} />
         {count > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full text-[9px] font-bold text-white flex items-center justify-center"
-            style={{ backgroundColor: "oklch(0.60 0.22 27)" }}>
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-0.5 rounded-full text-[9px] font-bold flex items-center justify-center"
+            style={{ backgroundColor: "var(--destructive)", color: "oklch(0.99 0 0)" }}>
             {count > 9 ? "9+" : count}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 top-10 w-80 bg-card border border-border rounded-2xl z-50 overflow-hidden"
+        <div className="absolute right-0 top-10 w-80 bg-popover border border-border rounded-2xl z-50 overflow-hidden"
           style={{ boxShadow: "0 24px 60px oklch(0 0 0 / 22%), 0 0 0 1px oklch(0 0 0 / 6%)" }}>
 
           <div className="px-4 py-3 border-b border-border flex justify-between items-center">

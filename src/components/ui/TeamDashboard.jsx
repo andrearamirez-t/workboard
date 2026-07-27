@@ -15,10 +15,10 @@ function hashHue(str) {
 }
 
 function avanceColor(v) {
-  if (v >= 75) return "oklch(0.55 0.18 145)"
-  if (v >= 50) return "oklch(0.55 0.18 260)"
-  if (v >= 25) return "oklch(0.60 0.18 55)"
-  return "oklch(0.60 0.20 27)"
+  if (v >= 75) return "oklch(0.62 0.15 145)"   // --success
+  if (v >= 50) return "oklch(0.62 0.12 230)"   // --info
+  if (v >= 25) return "oklch(0.75 0.15 80)"    // --warning
+  return "oklch(0.577 0.245 27.325)"           // --destructive
 }
 
 export function TeamDashboard({ colleagues, logs }) {
@@ -57,9 +57,9 @@ export function TeamDashboard({ colleagues, logs }) {
       {/* ── Stats strip ────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { value: colleagues.length, label: "Personas", sub: "en el equipo", hue: "260" },
-          { value: activeProjects.length, label: "Proyectos activos", sub: "en curso / revisión", hue: "145" },
-          { value: `${avgAvance}%`, label: "Avance promedio", sub: "del equipo", hue: "55" },
+          { value: colleagues.length, label: "Personas", sub: "en el equipo", hue: "230" },
+          { value: activeProjects.length, label: "Proyectos activos", sub: "en curso / revisión", hue: "165" },
+          { value: `${avgAvance}%`, label: "Avance promedio", sub: "del equipo", hue: "80" },
           { value: logsThisWeek.length, label: "Notas esta semana", sub: "actividad reciente", hue: "295" },
         ].map((s, i) => (
           <div key={i} className={statCardCls} style={{ borderTop: `3px solid oklch(0.62 0.22 ${s.hue})` }}>

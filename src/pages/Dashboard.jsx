@@ -220,7 +220,7 @@ export default function Dashboard() {
         style={{ backgroundColor: "color-mix(in srgb, var(--background) 82%, transparent)", backdropFilter: "blur(20px)" }}>
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold select-none"
-            style={{ background: "linear-gradient(140deg, oklch(0.60 0.24 295), oklch(0.50 0.26 316))", boxShadow: "0 2px 8px oklch(0.52 0.24 295 / 35%)" }}>
+            style={{ background: "linear-gradient(140deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))", boxShadow: "0 2px 8px oklch(0.52 0.13 165 / 32%)" }}>
             W
           </div>
           <span className="text-[15px] font-semibold tracking-tight text-foreground">Workboard</span>
@@ -231,7 +231,7 @@ export default function Dashboard() {
           </span>
           <ThemeToggle />
           <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold select-none cursor-default"
-            style={{ background: "linear-gradient(135deg, oklch(0.62 0.22 295), oklch(0.50 0.24 316))", boxShadow: "0 2px 6px oklch(0.52 0.22 295 / 30%)" }}
+            style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))", boxShadow: "0 2px 6px oklch(0.52 0.13 165 / 28%)" }}
             title={user?.displayName || user?.email}>
             {userInitial}
           </div>
@@ -289,8 +289,8 @@ export default function Dashboard() {
             <button key={t.key} onClick={() => setTab(t.key)}
               className="flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-all border-b-2 -mb-px"
               style={{
-                borderColor: tab === t.key ? "oklch(0.62 0.22 295)" : "transparent",
-                color: tab === t.key ? "oklch(0.62 0.22 295)" : "var(--muted-foreground)",
+                borderColor: tab === t.key ? "var(--primary)" : "transparent",
+                color: tab === t.key ? "var(--primary)" : "var(--muted-foreground)",
               }}>
               {t.icon}{t.label}
             </button>
@@ -390,8 +390,8 @@ export default function Dashboard() {
         ) : colleagues.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-28 text-muted-foreground animate-fade-up">
             <div className="w-14 h-14 rounded-2xl mb-4 flex items-center justify-center"
-              style={{ background: "oklch(0.52 0.24 295 / 0.10)" }}>
-              <UserCircle size={26} style={{ color: "oklch(0.52 0.24 295)" }} />
+              style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
+              <UserCircle size={26} style={{ color: "oklch(0.52 0.13 165)" }} />
             </div>
             <p className="font-semibold text-foreground text-[15px]">Sin compañeros aún</p>
             <p className="text-[13px] mt-1">Agrega el primero para empezar.</p>
@@ -455,7 +455,7 @@ export default function Dashboard() {
                           <p className="font-bold text-[15px] text-foreground leading-tight">{c.nombre}</p>
                           {c.id === myColleagueId && (
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 tracking-wide"
-                              style={{ backgroundColor: "oklch(0.52 0.24 295 / 0.15)", color: "oklch(0.62 0.22 295)" }}>
+                              style={{ backgroundColor: "oklch(0.52 0.13 165 / 0.14)", color: "oklch(0.42 0.13 165)" }}>
                               TÚ
                             </span>
                           )}

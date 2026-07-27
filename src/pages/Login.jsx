@@ -28,12 +28,12 @@ export default function Login() {
 
       {/* Color blobs */}
       <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute -top-32 -left-32 w-[500px] h-[500px] rounded-full opacity-25"
-          style={{ background: "radial-gradient(circle, oklch(0.60 0.24 295), transparent 65%)", filter: "blur(80px)" }} />
+        <div className="absolute -top-32 -left-32 w-[500px] h-[500px] rounded-full opacity-22"
+          style={{ background: "radial-gradient(circle, oklch(0.52 0.13 165), transparent 65%)", filter: "blur(80px)" }} />
         <div className="absolute -bottom-32 -right-32 w-[500px] h-[500px] rounded-full opacity-18"
-          style={{ background: "radial-gradient(circle, oklch(0.55 0.22 316), transparent 65%)", filter: "blur(80px)" }} />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] rounded-full opacity-8"
-          style={{ background: "radial-gradient(circle, oklch(0.50 0.20 280), transparent 55%)", filter: "blur(100px)" }} />
+          style={{ background: "radial-gradient(circle, oklch(0.58 0.16 295), transparent 65%)", filter: "blur(80px)" }} />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] rounded-full opacity-6"
+          style={{ background: "radial-gradient(circle, oklch(0.52 0.13 165), transparent 55%)", filter: "blur(100px)" }} />
       </div>
 
       {/* Theme toggle */}
@@ -47,28 +47,28 @@ export default function Login() {
 
           {/* Outer glow ring */}
           <div className="absolute inset-0 rounded-3xl pointer-events-none"
-            style={{ background: "oklch(0.55 0.22 295 / 0.12)", filter: "blur(32px)", transform: "scale(1.08)" }} />
+            style={{ background: "oklch(0.52 0.13 165 / 0.10)", filter: "blur(32px)", transform: "scale(1.08)" }} />
 
           <div className="relative bg-card border border-border rounded-3xl p-8 space-y-7"
-            style={{ boxShadow: "0 32px 80px oklch(0.52 0.22 295 / 16%), 0 0 0 1px oklch(0.60 0.18 290 / 10%)" }}>
+            style={{ boxShadow: "0 32px 80px oklch(0.52 0.13 165 / 14%), 0 0 0 1px oklch(0.52 0.13 165 / 8%)" }}>
 
             {/* Top accent line */}
             <div className="absolute top-0 left-8 right-8 h-px rounded-full"
-              style={{ background: "linear-gradient(90deg, transparent, oklch(0.65 0.20 295 / 0.6), transparent)" }} />
+              style={{ background: "linear-gradient(90deg, transparent, oklch(0.52 0.13 165 / 0.55), transparent)" }} />
 
             {/* Logo + title */}
             <div className="text-center space-y-4">
               <div className="relative mx-auto w-fit">
                 <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-white text-3xl font-bold"
                   style={{
-                    background: "linear-gradient(140deg, oklch(0.62 0.24 295), oklch(0.50 0.26 316))",
-                    boxShadow: "0 12px 32px oklch(0.52 0.24 295 / 45%)",
+                    background: "linear-gradient(140deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))",
+                    boxShadow: "0 12px 32px oklch(0.52 0.13 165 / 40%)",
                   }}>
                   W
                 </div>
                 {/* Glow behind logo */}
                 <div className="absolute -inset-2 rounded-3xl -z-10"
-                  style={{ background: "oklch(0.60 0.22 295 / 0.20)", filter: "blur(16px)" }} />
+                  style={{ background: "oklch(0.52 0.13 165 / 0.18)", filter: "blur(16px)" }} />
               </div>
               <div>
                 <h1 className="text-[26px] font-bold tracking-tight text-foreground">Workboard</h1>
@@ -83,12 +83,12 @@ export default function Login() {
               <button onClick={loginWithGoogle}
                 className="w-full h-11 rounded-xl text-[14px] font-semibold text-white relative overflow-hidden group transition-all"
                 style={{
-                  background: "linear-gradient(135deg, oklch(0.58 0.22 295), oklch(0.50 0.24 316))",
-                  boxShadow: "0 8px 24px oklch(0.52 0.22 295 / 35%)",
+                  background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.44 0.14 185))",
+                  boxShadow: "0 8px 24px oklch(0.52 0.13 165 / 32%)",
                 }}>
                 {/* Shine sweep on hover */}
                 <span className="absolute inset-0 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity"
-                  style={{ background: "linear-gradient(105deg, transparent 30%, oklch(1 0 0 / 0.15) 50%, transparent 70%)" }} />
+                  style={{ background: "linear-gradient(105deg, transparent 30%, oklch(1 0 0 / 0.14) 50%, transparent 70%)" }} />
                 <span className="relative flex items-center justify-center gap-2.5">
                   {/* Google icon */}
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
