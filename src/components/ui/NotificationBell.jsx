@@ -81,6 +81,27 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
           })
         setItems(prev => [...prev.filter(i => i.source !== "notif"), ...fresh])
       }, () => {}))
+
+      // Notificaciones personales para admin (ej: invitación a grupo)
+      if (userUid) {
+        const qU = query(collection(db, "notif_usuario", userUid, "items"), orderBy("createdAt", "desc"))
+        unsubs.push(onSnapshot(qU, (snap) => {
+          const readIds = getReadIds(keyUserNotif)
+          const fresh = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(doc => !readIds.has(doc.id))
+            .map(doc => ({
+              id: doc.id,
+              source: "unotif",
+              text: doc.titulo || "Nueva notificación",
+              sub: doc.subtitulo || null,
+              date: doc.createdAt?.toDate?.(),
+              href: doc.path || "/dashboard",
+              dot: "oklch(0.55 0.18 260)",
+            }))
+          setItems(prev => [...prev.filter(i => i.source !== "unotif"), ...fresh])
+        }, () => {}))
+      }
     } else {
       // Retroalimentación individual
       const q = query(

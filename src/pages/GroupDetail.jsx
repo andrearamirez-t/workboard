@@ -12,12 +12,14 @@ import {
   addGrupoLog, getGrupoLogs, deleteGrupoLog, updateGrupoLog,
   addGrupoTask, getGrupoTasks, updateGrupoTask, updateGrupoTaskStatus, deleteGrupoTask, updateGrupoTaskAvance,
   addGrupoFeedback, getGrupoFeedback, deleteGrupoFeedback, updateGrupoFeedback,
-  solicitarPlazoGrupoTask, addGrupoTaskFile, removeGrupoTaskFile,
+  solicitarPlazoGrupoTask, aceptarPlazoGrupoTask, rechazarPlazoGrupoTask, dismissPlazoGrupoResultado,
+  addGrupoTaskFile, removeGrupoTaskFile,
 } from "@/services/groups.service"
 import { notificarTareaCompletada, crearNotificacionUsuario } from "@/services/notificaciones.service"
-import { getColleagues } from "@/services/colleagues.service"
+import { getColleagues, addProject } from "@/services/colleagues.service"
 import { uploadGroupDocument, getGroupDocuments, deleteGroupDocument, uploadGrupoTaskFile, deleteTaskFile, MAX_FILE_SIZE } from "@/services/storage.service"
 import { Pencil, Trash2, Check, X, Plus, ChevronDown, ChevronUp } from "lucide-react"
+import { downloadFile } from "@/utils/download"
 
 function getFileTypeInfo(tipo, nombre) {
   const ext = (nombre || "").split(".").pop().toLowerCase()
@@ -82,6 +84,9 @@ export default function GroupDetail() {
   const [projectForm, setProjectForm] = useState(EMPTY_PROJECT)
   const [savingProject, setSavingProject] = useState(false)
   const [projectSearch, setProjectSearch] = useState("")
+  const [returningProject, setReturningProject] = useState(null)
+  const [returnTargetId, setReturnTargetId] = useState("")
+  const [savingReturn, setSavingReturn] = useState(false)
 
   // Documentos
   const fileInputRef = useRef(null)
@@ -104,6 +109,10 @@ export default function GroupDetail() {
   const [solicitudMotivo, setSolicitudMotivo] = useState("")
   const [solicitudFecha, setSolicitudFecha] = useState("")
   const [savingSolicitud, setSavingSolicitud] = useState(false)
+  const [editandoSolicitudId, setEditandoSolicitudId] = useState(null)
+  const [aceptandoPlazoId, setAceptandoPlazoId] = useState(null)
+  const [fechaAceptar, setFechaAceptar] = useState("")
+  const [savingPlazo, setSavingPlazo] = useState(false)
   const [taskAvanceLocal, setTaskAvanceLocal] = useState({})
   const [savingAvance, setSavingAvance] = useState(null)
   const [openTaskFiles, setOpenTaskFiles] = useState(new Set())
@@ -251,9 +260,48 @@ export default function GroupDetail() {
     setGrupo(prev => ({ ...prev, proyectos: (prev.proyectos || []).filter(p => p !== proyecto) }))
   }
 
-  const handleReturnProject = async (proyecto) => {
-    await deleteGrupoProject(id, proyecto)
-    setGrupo(prev => ({ ...prev, proyectos: (prev.proyectos || []).filter(p => p !== proyecto) }))
+  const handleReturnProject = (proyecto) => {
+    if (proyecto.enrutadoDe) {
+      // Nuevo comportamiento: el proyecto ya está en el perfil individual, solo quitar del grupo
+      deleteGrupoProject(id, proyecto)
+      setGrupo(prev => ({ ...prev, proyectos: (prev.proyectos || []).filter(p => p !== proyecto) }))
+    } else {
+      // Proyecto antiguo (enrutado antes del fix): hay que elegir a qué compañera devolverlo
+      setReturnTargetId("")
+      setReturningProject(proyecto)
+    }
+  }
+
+  const handleConfirmReturn = async () => {
+    const targetId = returnTargetId || miembros[0]?.id
+    if (!returningProject || !targetId) return
+    setSavingReturn(true)
+    try {
+      const { enrutadoDe, ...raw } = returningProject
+      // Normalizar al formato exacto que espera el perfil individual (ProjectForm)
+      const projectData = {
+        nombre: raw.nombre || "",
+        estado: raw.estado || "",
+        avance: Number(raw.avance) || 0,
+        area: raw.area || "",
+        queHace: raw.queHace || "",
+        herramientas: Array.isArray(raw.herramientas)
+          ? raw.herramientas
+          : (raw.herramientas || "").split(",").map(h => h.trim()).filter(Boolean),
+        observaciones: raw.observaciones || "",
+        fechaInicio: raw.fechaInicio || "",
+        fechaEntrega: raw.fechaEntrega || "",
+        versiones: raw.versiones || [],
+      }
+      await addProject(targetId, projectData)
+      await deleteGrupoProject(id, returningProject)
+      setGrupo(prev => ({ ...prev, proyectos: (prev.proyectos || []).filter(p => p !== returningProject) }))
+      setReturningProject(null)
+    } catch (err) {
+      console.error("[Workboard] Error devolviendo proyecto a individual:", err)
+    } finally {
+      setSavingReturn(false)
+    }
   }
 
   const openEditProject = (p) => {
@@ -343,6 +391,38 @@ export default function GroupDetail() {
       console.error("[Workboard] Error solicitando plazo grupo:", err)
     } finally {
       setSavingSolicitud(false)
+    }
+  }
+
+  const handleAceptarPlazo = async (task) => {
+    const fechaPropuesta = task.solicitudPlazo?.fechaPropuesta
+    if (!fechaPropuesta && !fechaAceptar) {
+      setAceptandoPlazoId(task.id)
+      setFechaAceptar("")
+      return
+    }
+    setSavingPlazo(true)
+    try {
+      await aceptarPlazoGrupoTask(id, task.id, fechaPropuesta || fechaAceptar)
+      setAceptandoPlazoId(null)
+      setFechaAceptar("")
+      setTasks(await getGrupoTasks(id))
+    } catch (err) {
+      console.error("[Workboard] Error aceptando plazo grupo:", err)
+    } finally {
+      setSavingPlazo(false)
+    }
+  }
+
+  const handleRechazarPlazo = async (taskId) => {
+    setSavingPlazo(true)
+    try {
+      await rechazarPlazoGrupoTask(id, taskId)
+      setTasks(await getGrupoTasks(id))
+    } catch (err) {
+      console.error("[Workboard] Error rechazando plazo grupo:", err)
+    } finally {
+      setSavingPlazo(false)
     }
   }
 
@@ -655,8 +735,8 @@ export default function GroupDetail() {
                                     style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
                                   <span className="flex-1 text-[11px] text-foreground truncate">{d.nombre}</span>
                                   {d.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
-                                  <a href={d.url} target="_blank" rel="noopener noreferrer"
-                                    className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↗</a>
+                                  <button type="button" onClick={() => downloadFile(d.url, d.nombre)}
+                                    className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
                                   {isAdmin && (
                                     <button type="button" onClick={() => handleDeleteGroupDoc(d)}
                                       className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
@@ -716,7 +796,7 @@ export default function GroupDetail() {
                           </div>
                           {(isAdmin || isMember) && (
                             <div className="flex gap-2 flex-shrink-0 items-center">
-                              {isAdmin && p.enrutadoDe && (
+                              {isAdmin && (
                                 <button
                                   onClick={() => handleReturnProject(p)}
                                   title="Devolver al perfil individual"
@@ -817,8 +897,8 @@ export default function GroupDetail() {
                                           style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
                                         <span className="flex-1 text-[11px] text-foreground truncate">{d.nombre}</span>
                                         {d.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
-                                        <a href={d.url} target="_blank" rel="noopener noreferrer"
-                                          className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↗</a>
+                                        <button type="button" onClick={() => downloadFile(d.url, d.nombre)}
+                                          className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
                                         {isAdmin && (
                                           <button onClick={() => handleDeleteGroupDoc(d)}
                                             className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
@@ -1031,6 +1111,21 @@ export default function GroupDetail() {
                               <Button size="sm" onClick={() => handleSaveEditTask(t)}>Guardar</Button>
                               <Button size="sm" variant="outline" onClick={() => setEditingTaskId(null)}>Cancelar</Button>
                             </div>
+                            {t.plazoAceptado && (
+                              <div className= "px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.62 0.20 145 / 0.12)", border: "1px solid oklch(0.62 0.20 145 / 0.35)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.20 145)" }}>✓ Solicitud de tiempo aceptada</p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                  Nueva fecha límite: {format(new Date(t.plazoAceptado.nuevaFecha + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                </p>
+                              </div>
+                            )}
+                            {t.plazoRechazado && (
+                              <div className="px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.62 0.22 25 / 0.12)", border: "1px solid oklch(0.62 0.22 25 / 0.35)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.22 25)" }}>✗ Solicitud de tiempo rechazada</p>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="flex items-start gap-3">
@@ -1101,17 +1196,73 @@ export default function GroupDetail() {
                                   <p className="text-[12px] text-foreground mt-0.5">{t.solicitudPlazo.motivo}</p>
                                   {t.solicitudPlazo.fechaPropuesta && (
                                     <p className="text-[11px] text-muted-foreground mt-0.5">
-                                      Fecha propuesta: {t.solicitudPlazo.fechaPropuesta}
+                                      Fecha propuesta: {format(new Date(t.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
                                     </p>
+                                  )}
+                                  {aceptandoPlazoId === t.id ? (
+                                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                      <input type="date" value={fechaAceptar} onChange={e => setFechaAceptar(e.target.value)}
+                                        className="bg-background border border-border rounded-lg px-2 py-1 text-[11px] text-foreground focus:outline-none" />
+                                      <button onClick={() => handleAceptarPlazo(t)} disabled={!fechaAceptar || savingPlazo}
+                                        className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                        style={{ background: "oklch(0.55 0.18 145)" }}>
+                                        {savingPlazo ? "…" : "Confirmar"}
+                                      </button>
+                                      <button onClick={() => { setAceptandoPlazoId(null); setFechaAceptar("") }}
+                                        className="h-6 px-2 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
+                                        Cancelar
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex gap-2 mt-2">
+                                      <button onClick={() => handleAceptarPlazo(t)} disabled={savingPlazo}
+                                        className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                        style={{ background: "oklch(0.55 0.18 145)" }}>
+                                        {savingPlazo ? "…" : "✓ Aceptar"}
+                                      </button>
+                                      <button onClick={() => handleRechazarPlazo(t.id)} disabled={savingPlazo}
+                                        className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                        style={{ background: "oklch(0.50 0.22 25)" }}>
+                                        {savingPlazo ? "…" : "✗ Rechazar"}
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                               )}
 
                               {/* Confirmación para el miembro que ya solicitó */}
-                              {t.solicitudPlazo && isMember && (
-                                <p className="text-[11px] mt-1.5 font-medium" style={{ color: "oklch(0.58 0.20 55)" }}>
-                                  ⏰ Solicitud de más tiempo enviada
-                                </p>
+                              {t.solicitudPlazo && isMember && editandoSolicitudId !== t.id && (
+                                <div className="mt-1.5 px-3 py-2 rounded-lg"
+                                  style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
+                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>⏰ Solicitud enviada</p>
+                                  <p className="text-[12px] text-foreground mt-0.5">{t.solicitudPlazo.motivo}</p>
+                                  {t.solicitudPlazo.fechaPropuesta && (
+                                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                                      Fecha propuesta: {format(new Date(t.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                    </p>
+                                  )}
+                                  <button onClick={() => { setEditandoSolicitudId(t.id); setSolicitudMotivo(t.solicitudPlazo.motivo || ""); setSolicitudFecha(t.solicitudPlazo.fechaPropuesta || ""); setSolicitudPlazoId(t.id) }}
+                                    className="text-[11px] font-medium mt-1 hover:opacity-70 transition-opacity" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                    ✏ Editar solicitud
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Resultado de solicitud de plazo */}
+                              {t.plazoAceptado && (
+                                <div className="mt-2 px-3 py-2 rounded-lg"
+                                  style={{ background: "oklch(0.62 0.20 145 / 0.12)", border: "1px solid oklch(0.62 0.20 145 / 0.35)" }}>
+                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.20 145)" }}>✓ Solicitud de tiempo aceptada</p>
+                                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                                    Nueva fecha límite: {format(new Date(t.plazoAceptado.nuevaFecha + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                  </p>
+                                </div>
+                              )}
+                              {t.plazoRechazado && (
+                                <div className="mt-2 px-3 py-2 rounded-lg"
+                                  style={{ background: "oklch(0.62 0.22 25 / 0.12)", border: "1px solid oklch(0.62 0.22 25 / 0.35)" }}>
+                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.22 25)" }}>✗ Solicitud de tiempo rechazada</p>
+                                </div>
                               )}
 
                               {/* Archivos adjuntos de la tarea */}
@@ -1156,8 +1307,8 @@ export default function GroupDetail() {
                                               style={{ background: fi.bg, color: fi.color }}>{fi.label}</span>
                                             <span className="text-[11px] text-foreground truncate flex-1 min-w-0">{arch.nombre}</span>
                                             {arch.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(arch.size)}</span>}
-                                            <a href={arch.url} target="_blank" rel="noopener noreferrer"
-                                              className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</a>
+                                            <button type="button" onClick={() => downloadFile(arch.url, arch.nombre)}
+                                              className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
                                             {(isAdmin || isMember) && (
                                               <button onClick={() => handleDeleteGroupTaskFile(t.id, arch)}
                                                 className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">✕</button>
@@ -1171,7 +1322,7 @@ export default function GroupDetail() {
                               )}
 
                               {/* Botón / formulario para pedir plazo */}
-                              {isMember && !done && !t.solicitudPlazo && (
+                              {isMember && !done && !t.plazoAceptado && !t.plazoRechazado && (!t.solicitudPlazo || editandoSolicitudId === t.id) && (
                                 solicitudPlazoId === t.id ? (
                                   <div className="mt-2 space-y-2">
                                     <textarea
@@ -1188,13 +1339,13 @@ export default function GroupDetail() {
                                       <span className="text-[11px] text-muted-foreground">fecha propuesta (opcional)</span>
                                     </div>
                                     <div className="flex gap-2">
-                                      <button onClick={() => handleSolicitarPlazo(t.id)}
+                                      <button onClick={() => { handleSolicitarPlazo(t.id); setEditandoSolicitudId(null) }}
                                         disabled={savingSolicitud || !solicitudMotivo.trim()}
                                         className="h-7 px-3 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
                                         style={{ background: "oklch(0.58 0.20 55)" }}>
                                         {savingSolicitud ? "Enviando…" : "Enviar solicitud"}
                                       </button>
-                                      <button onClick={() => { setSolicitudPlazoId(null); setSolicitudMotivo(""); setSolicitudFecha("") }}
+                                      <button onClick={() => { setSolicitudPlazoId(null); setSolicitudMotivo(""); setSolicitudFecha(""); setEditandoSolicitudId(null) }}
                                         className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
                                         Cancelar
                                       </button>
@@ -1301,6 +1452,42 @@ export default function GroupDetail() {
 
       </main>
       <Footer />
+
+      {/* Modal: devolver proyecto a perfil individual */}
+      {returningProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "oklch(0 0 0 / 0.55)", backdropFilter: "blur(4px)" }}>
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="text-[15px] font-bold text-foreground mb-1">Devolver al perfil individual</h3>
+            <p className="text-[12px] text-muted-foreground mb-4">
+              Selecciona a qué compañera pertenece el proyecto <strong>"{returningProject.nombre}"</strong>.
+              Se añadirá a su perfil y se quitará del grupo.
+            </p>
+            <select
+              value={returnTargetId || miembros[0]?.id || ""}
+              onChange={e => setReturnTargetId(e.target.value)}
+              className="w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 mb-4">
+              {miembros.map(m => (
+                <option key={m.id} value={m.id}>{m.nombre}</option>
+              ))}
+            </select>
+            <div className="flex gap-2">
+              <button
+                onClick={handleConfirmReturn}
+                disabled={savingReturn || !returnTargetId}
+                className="flex-1 py-2 rounded-xl text-[13px] font-bold text-white disabled:opacity-50 transition-opacity hover:opacity-90"
+                style={{ background: "oklch(0.55 0.18 145)" }}>
+                {savingReturn ? "Devolviendo…" : "Confirmar"}
+              </button>
+              <button
+                onClick={() => setReturningProject(null)}
+                className="flex-1 py-2 rounded-xl text-[13px] border border-border text-muted-foreground hover:text-foreground transition-colors">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Input oculto para documentos de proyectos */}
       <input ref={fileInputRef} type="file"

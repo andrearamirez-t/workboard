@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react"
+import { downloadFile } from "@/utils/download"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { doc, updateDoc, arrayUnion } from "firebase/firestore"
 import { db } from "@/services/firebase"
@@ -358,8 +359,8 @@ export default function ProjectForm() {
                           style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
                         <span className="flex-1 text-[12px] text-foreground truncate">{d.nombre}</span>
                         {d.size && <span className="text-[11px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
-                        <a href={d.url} target="_blank" rel="noopener noreferrer"
-                          className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 text-[13px]" title="Abrir">↗</a>
+                        <button type="button" onClick={() => downloadFile(d.url, d.nombre)}
+                          className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 text-[13px]" title="Descargar">↓</button>
                         {(isAdmin || true) && (
                           <button type="button" onClick={() => handleDeleteDoc(d)}
                             className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0 text-[15px] leading-none">×</button>

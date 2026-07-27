@@ -589,7 +589,7 @@ export default function Dashboard() {
             {(() => {
               const visibleEquipos = isAdmin
                 ? equipos
-                : equipos.filter(eq => eq.memberUids?.includes(user?.uid))
+                : equipos.filter(eq => (eq.miembros || []).includes(myColleagueId))
               const emptyMsg = isAdmin ? "Crea el primero con el botón de arriba." : "Pídele al admin o a un compañero que te agregue."
               return visibleEquipos.length === 0 && !showEquipoForm && !editingEquipo ? (
               <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">

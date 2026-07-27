@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react"
+import { downloadFile } from "@/utils/download"
 import { useParams, useNavigate } from "react-router-dom"
 import { doc, getDoc } from "firebase/firestore"
 import { db } from "@/services/firebase"
@@ -6,7 +7,7 @@ import { deleteColleague, deleteProject } from "@/services/colleagues.service"
 import { getGrupos, addGrupoProject } from "@/services/groups.service"
 import { addLog, getLogs, deleteLog, updateLog } from "@/services/logs.service"
 import { addFeedback, getFeedback, deleteFeedback, updateFeedback } from "@/services/feedback.service"
-import { addTask, getTasks, updateTask, updateTaskStatus, deleteTask, updateTaskAvance, addTaskFile, removeTaskFile, solicitarPlazoTask, cancelarPlazoTask } from "@/services/tasks.service"
+import { addTask, getTasks, updateTask, updateTaskStatus, deleteTask, updateTaskAvance, addTaskFile, removeTaskFile, solicitarPlazoTask, cancelarPlazoTask, aceptarPlazoTask, rechazarPlazoTask, dismissPlazoResultadoTask } from "@/services/tasks.service"
 import { notificarTareaCompletada, crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { queueTareaNotification } from "@/services/wpp.service"
 import { uploadDocument, getDocuments, deleteDocument, uploadTaskFile, deleteTaskFile, MAX_FILE_SIZE } from "@/services/storage.service"
@@ -119,6 +120,10 @@ export default function ColleagueDetail() {
   const [solicitudMotivo, setSolicitudMotivo] = useState("")
   const [solicitudFecha, setSolicitudFecha] = useState("")
   const [savingSolicitud, setSavingSolicitud] = useState(false)
+  const [editandoSolicitudId, setEditandoSolicitudId] = useState(null)
+  const [aceptandoPlazoId, setAceptandoPlazoId] = useState(null)
+  const [fechaAceptar, setFechaAceptar] = useState("")
+  const [savingPlazo, setSavingPlazo] = useState(false)
   const [taskAvanceLocal, setTaskAvanceLocal] = useState({})
   const [savingAvance, setSavingAvance] = useState(null)
   const [openTaskFiles, setOpenTaskFiles] = useState(new Set())
@@ -289,7 +294,7 @@ export default function ColleagueDetail() {
         solicitadoPor: companero?.nombre || user?.displayName || user?.email,
         fecha: new Date().toISOString(),
       })
-      setSolicitudPlazoId(null)
+      setEditingTaskId(null)
       setSolicitudMotivo("")
       setSolicitudFecha("")
       setTasks(await getTasks(id))
@@ -297,6 +302,38 @@ export default function ColleagueDetail() {
       console.error("[Workboard] Error solicitando plazo:", err.code, err.message)
     } finally {
       setSavingSolicitud(false)
+    }
+  }
+
+  const handleAceptarPlazo = async (task) => {
+    const fechaPropuesta = task.solicitudPlazo?.fechaPropuesta
+    if (!fechaPropuesta && !fechaAceptar) {
+      setAceptandoPlazoId(task.id)
+      setFechaAceptar("")
+      return
+    }
+    setSavingPlazo(true)
+    try {
+      await aceptarPlazoTask(id, task.id, fechaPropuesta || fechaAceptar)
+      setAceptandoPlazoId(null)
+      setFechaAceptar("")
+      setTasks(await getTasks(id))
+    } catch (err) {
+      console.error("[Workboard] Error aceptando plazo:", err)
+    } finally {
+      setSavingPlazo(false)
+    }
+  }
+
+  const handleRechazarPlazo = async (taskId) => {
+    setSavingPlazo(true)
+    try {
+      await rechazarPlazoTask(id, taskId)
+      setTasks(await getTasks(id))
+    } catch (err) {
+      console.error("[Workboard] Error rechazando plazo:", err)
+    } finally {
+      setSavingPlazo(false)
     }
   }
 
@@ -871,10 +908,10 @@ export default function ColleagueDetail() {
                                       </span>
                                       <span className="text-[12px] text-foreground truncate flex-1 min-w-0">{documento.nombre}</span>
                                       <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(documento.size)}</span>
-                                      <a href={documento.url} target="_blank" rel="noopener noreferrer"
+                                      <button type="button" onClick={() => downloadFile(documento.url, documento.nombre)}
                                         className="text-[14px] text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
-                                        title="Abrir / descargar">↓</a>
-                                      {isAdmin && (
+                                        title="Descargar">↓</button>
+                                      {(isAdmin || isOwn) && (
                                         <button onClick={() => handleDeleteDoc(documento.id, documento.storagePath)}
                                           className="text-[12px] text-muted-foreground hover:text-destructive transition-colors flex-shrink-0"
                                           title="Eliminar">✕</button>
@@ -1263,11 +1300,75 @@ export default function ColleagueDetail() {
                             </>
                           )}
 
-                          {/* Solicitud de más tiempo — dentro del formulario */}
-                          {isOwn && task.estado !== "Hecha" && (
-                            <div className={isAdmin ? "pt-3 border-t border-border space-y-2" : "space-y-2"}>
+                          {/* Solicitud de plazo pendiente — visible para admin dentro del panel de edición */}
+                          {isAdmin && task.solicitudPlazo && (
+                            <div className="pt-3 border-t border-border space-y-2">
+                              <p className="text-[12px] font-semibold text-foreground">⏰ Solicitud de tiempo extra</p>
+                              <div className="px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                  Solicitado por: {task.solicitudPlazo.solicitadoPor}
+                                </p>
+                                <p className="text-[12px] text-foreground mt-0.5">{task.solicitudPlazo.motivo}</p>
+                                {task.solicitudPlazo.fechaPropuesta && (
+                                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                                    Nueva fecha propuesta: {format(new Date(task.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                  </p>
+                                )}
+                                {aceptandoPlazoId === task.id ? (
+                                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                    <input type="date" value={fechaAceptar} onChange={e => setFechaAceptar(e.target.value)}
+                                      className="bg-background border border-border rounded-lg px-2 py-1 text-[11px] text-foreground focus:outline-none" />
+                                    <button onClick={() => handleAceptarPlazo(task)} disabled={!fechaAceptar || savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.55 0.18 145)" }}>
+                                      {savingPlazo ? "…" : "Confirmar"}
+                                    </button>
+                                    <button onClick={() => { setAceptandoPlazoId(null); setFechaAceptar("") }}
+                                      className="h-6 px-2 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex gap-2 mt-2">
+                                    <button onClick={() => handleAceptarPlazo(task)} disabled={savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.55 0.18 145)" }}>
+                                      {savingPlazo ? "…" : "✓ Aceptar"}
+                                    </button>
+                                    <button onClick={() => handleRechazarPlazo(task.id)} disabled={savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.50 0.22 25)" }}>
+                                      {savingPlazo ? "…" : "✗ Rechazar"}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Resultado de plazo — dentro del panel de edición */}
+                          {task.plazoAceptado && (
+                            <div className="px-3 py-2 rounded-lg"
+                              style={{ background: "oklch(0.62 0.20 145 / 0.12)", border: "1px solid oklch(0.62 0.20 145 / 0.35)" }}>
+                              <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.20 145)" }}>✓ Solicitud de tiempo aceptada</p>
+                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                Nueva fecha límite: {format(new Date(task.plazoAceptado.nuevaFecha + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                              </p>
+                            </div>
+                          )}
+                          {task.plazoRechazado && (
+                            <div className="px-3 py-2 rounded-lg"
+                              style={{ background: "oklch(0.62 0.22 25 / 0.12)", border: "1px solid oklch(0.62 0.22 25 / 0.35)" }}>
+                              <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.22 25)" }}>✗ Solicitud de tiempo rechazada</p>
+                            </div>
+                          )}
+
+                          {/* Solicitud de más tiempo — dentro del formulario (dueño de la tarea) */}
+                          {isOwn && task.estado !== "Hecha" && !task.plazoAceptado && !task.plazoRechazado && (
+                            <div className="pt-3 border-t border-border space-y-2">
                               <p className="text-[12px] font-semibold text-foreground">⏳ Solicitar más tiempo</p>
-                              {task.solicitudPlazo ? (
+                              {task.solicitudPlazo && editandoSolicitudId !== task.id ? (
                                 <div className="px-3 py-2 rounded-lg space-y-1"
                                   style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
                                   <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>Solicitud enviada</p>
@@ -1277,10 +1378,16 @@ export default function ColleagueDetail() {
                                       Fecha propuesta: {format(new Date(task.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
                                     </p>
                                   )}
-                                  <button onClick={async () => { await cancelarPlazoTask(id, task.id); setTasks(await getTasks(id)) }}
-                                    className="text-[11px] text-destructive hover:opacity-70 transition-opacity mt-1">
-                                    Cancelar solicitud
-                                  </button>
+                                  <div className="flex gap-3 mt-1">
+                                    <button onClick={() => { setEditandoSolicitudId(task.id); setSolicitudMotivo(task.solicitudPlazo.motivo || ""); setSolicitudFecha(task.solicitudPlazo.fechaPropuesta || "") }}
+                                      className="text-[11px] font-medium hover:opacity-70 transition-opacity" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                      ✏ Editar solicitud
+                                    </button>
+                                    <button onClick={async () => { await cancelarPlazoTask(id, task.id); setTasks(await getTasks(id)) }}
+                                      className="text-[11px] text-destructive hover:opacity-70 transition-opacity">
+                                      Cancelar solicitud
+                                    </button>
+                                  </div>
                                 </div>
                               ) : (
                                 <>
@@ -1298,18 +1405,16 @@ export default function ColleagueDetail() {
                                     <span className="text-[11px] text-muted-foreground">fecha propuesta (opcional)</span>
                                   </div>
                                   <div className="flex gap-2">
-                                    <button onClick={() => handleSolicitarPlazo(task.id)}
+                                    <button onClick={() => { handleSolicitarPlazo(task.id); setEditandoSolicitudId(null) }}
                                       disabled={savingSolicitud || !solicitudMotivo.trim()}
                                       className="h-7 px-3 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
                                       style={{ background: "oklch(0.58 0.20 55)" }}>
                                       {savingSolicitud ? "Enviando…" : "Enviar solicitud"}
                                     </button>
-                                    {!isAdmin && (
-                                      <button onClick={() => { setEditingTaskId(null); setSolicitudMotivo(""); setSolicitudFecha("") }}
-                                        className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
-                                        Cerrar
-                                      </button>
-                                    )}
+                                    <button onClick={() => { setEditandoSolicitudId(null); setSolicitudMotivo(""); setSolicitudFecha(""); if (!task.solicitudPlazo) setEditingTaskId(null) }}
+                                      className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
+                                      Cancelar
+                                    </button>
                                   </div>
                                 </>
                               )}
@@ -1351,8 +1456,8 @@ export default function ColleagueDetail() {
                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                   </button>
                                 )}
-                                {isOwn && !isAdmin && task.estado !== "Hecha" && !task.solicitudPlazo && (
-                                  <button onClick={() => { setEditingTaskId(task.id); setSolicitudMotivo(""); setSolicitudFecha("") }}
+                                {isOwn && task.estado !== "Hecha" && !task.solicitudPlazo && !task.plazoAceptado && !task.plazoRechazado && (
+                                  <button onClick={() => { setEditingTaskId(task.id); setSolicitudMotivo(""); setSolicitudFecha(""); setEditingTaskForm({ titulo: task.titulo, descripcion: task.descripcion || "", fechaInicio: task.fechaInicio || "", fechaLimite: task.fechaLimite || "", avance: task.avance ?? 0 }) }}
                                     className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground"
                                     title="Solicitar más tiempo">
                                     ⏳
@@ -1443,6 +1548,34 @@ export default function ColleagueDetail() {
                                     Fecha propuesta: {format(new Date(task.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
                                   </p>
                                 )}
+                                {aceptandoPlazoId === task.id ? (
+                                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                    <input type="date" value={fechaAceptar} onChange={e => setFechaAceptar(e.target.value)}
+                                      className="bg-background border border-border rounded-lg px-2 py-1 text-[11px] text-foreground focus:outline-none" />
+                                    <button onClick={() => handleAceptarPlazo(task)} disabled={!fechaAceptar || savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.55 0.18 145)" }}>
+                                      {savingPlazo ? "…" : "Confirmar"}
+                                    </button>
+                                    <button onClick={() => { setAceptandoPlazoId(null); setFechaAceptar("") }}
+                                      className="h-6 px-2 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex gap-2 mt-2">
+                                    <button onClick={() => handleAceptarPlazo(task)} disabled={savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.55 0.18 145)" }}>
+                                      {savingPlazo ? "…" : "✓ Aceptar"}
+                                    </button>
+                                    <button onClick={() => handleRechazarPlazo(task.id)} disabled={savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.50 0.22 25)" }}>
+                                      {savingPlazo ? "…" : "✗ Rechazar"}
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             )}
 
@@ -1451,6 +1584,23 @@ export default function ColleagueDetail() {
                               <p className="text-[11px] mt-1.5 font-medium" style={{ color: "oklch(0.58 0.20 55)" }}>
                                 ⏰ Solicitud de más tiempo enviada
                               </p>
+                            )}
+
+                            {/* Resultado de solicitud de plazo */}
+                            {task.plazoAceptado && (
+                              <div className="mt-2 px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.62 0.20 145 / 0.12)", border: "1px solid oklch(0.62 0.20 145 / 0.35)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.20 145)" }}>✓ Solicitud de tiempo aceptada</p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                  Nueva fecha límite: {format(new Date(task.plazoAceptado.nuevaFecha + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                </p>
+                              </div>
+                            )}
+                            {task.plazoRechazado && (
+                              <div className="mt-2 px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.62 0.22 25 / 0.12)", border: "1px solid oklch(0.62 0.22 25 / 0.35)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.22 25)" }}>✗ Solicitud de tiempo rechazada</p>
+                              </div>
                             )}
 
                             {/* Archivos adjuntos de la tarea */}
@@ -1498,8 +1648,8 @@ export default function ColleagueDetail() {
                                             style={{ background: fi.bg, color: fi.color }}>{fi.label}</span>
                                           <span className="text-[11px] text-foreground truncate flex-1 min-w-0">{arch.nombre}</span>
                                           {arch.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(arch.size)}</span>}
-                                          <a href={arch.url} target="_blank" rel="noopener noreferrer"
-                                            className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</a>
+                                          <button type="button" onClick={() => downloadFile(arch.url, arch.nombre)}
+                                            className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
                                           {(isAdmin || isOwn) && (
                                             <button onClick={() => handleDeleteTaskFile(task.id, arch)}
                                               className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">✕</button>

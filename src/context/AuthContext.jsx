@@ -1,8 +1,27 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth"
-import { doc, getDoc } from "firebase/firestore"
+import { doc, getDoc, collection, getDocs, updateDoc, arrayUnion } from "firebase/firestore"
 import { auth, googleProvider, db } from "@/services/firebase"
 import { getColleagueByEmail, linkColleagueUid } from "@/services/colleagues.service"
+
+// Agrega el uid del usuario a memberUids en todos los grupos donde ya aparece en miembros
+async function backfillMemberUids(companionId, uid) {
+  try {
+    const snap = await getDocs(collection(db, "equipos"))
+    const updates = []
+    snap.docs.forEach(d => {
+      const data = d.data()
+      const miembros = data.miembros || []
+      const memberUids = data.memberUids || []
+      if (miembros.includes(companionId) && !memberUids.includes(uid)) {
+        updates.push(updateDoc(doc(db, "equipos", d.id), { memberUids: arrayUnion(uid) }))
+      }
+    })
+    await Promise.all(updates)
+  } catch (e) {
+    console.error("[Workboard] Error en backfillMemberUids:", e.message)
+  }
+}
 
 const AuthContext = createContext(null)
 
@@ -32,7 +51,10 @@ export function AuthProvider({ children }) {
             if (snap.exists()) {
               setMyColleagueId(cached)
               setLoading(false)
-              if (!snap.data()?.uid) linkColleagueUid(cached, currentUser.uid).catch(() => {})
+              if (!snap.data()?.uid) {
+                linkColleagueUid(cached, currentUser.uid).catch(() => {})
+                backfillMemberUids(cached, currentUser.uid).catch(() => {})
+              }
               return
             }
             // Caché inválido (doc eliminado), limpiar
@@ -44,7 +66,10 @@ export function AuthProvider({ children }) {
           if (companion) {
             setMyColleagueId(companion.id)
             localStorage.setItem(cacheKey(currentUser.email), companion.id)
-            if (!companion.uid) await linkColleagueUid(companion.id, currentUser.uid)
+            if (!companion.uid) {
+              await linkColleagueUid(companion.id, currentUser.uid)
+              backfillMemberUids(companion.id, currentUser.uid).catch(() => {})
+            }
           } else {
             setMyColleagueId(null)
           }

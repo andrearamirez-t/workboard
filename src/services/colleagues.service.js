@@ -1,4 +1,4 @@
-import { collection, getDocs, getDoc, updateDoc, deleteDoc, doc, arrayRemove, query, where } from "firebase/firestore"
+import { collection, getDocs, getDoc, updateDoc, deleteDoc, doc, arrayRemove, arrayUnion, query, where } from "firebase/firestore"
 import { db } from "@/services/firebase"
 
 export const getColleagues = async () => {
@@ -19,6 +19,12 @@ export const linkColleagueUid = async (colleagueId, uid) => {
 
 export const deleteColleague = async (id) => {
   return await deleteDoc(doc(db, "companeros", id))
+}
+
+export const addProject = async (colleagueId, proyecto) => {
+  return await updateDoc(doc(db, "companeros", colleagueId), {
+    proyectos: arrayUnion(proyecto)
+  })
 }
 
 export const deleteProject = async (colleagueId, proyecto) => {

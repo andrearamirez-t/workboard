@@ -1,7 +1,7 @@
 import {
   doc, getDoc, updateDoc, arrayRemove, arrayUnion,
   collection, addDoc, getDocs, deleteDoc,
-  query, orderBy, serverTimestamp,
+  query, orderBy, serverTimestamp, deleteField,
 } from "firebase/firestore"
 import { db } from "@/services/firebase"
 
@@ -109,6 +109,30 @@ export const removeGrupoTaskFile = async (grupoId, taskId, archivo) => {
 
 export const solicitarPlazoGrupoTask = async (grupoId, taskId, solicitud) => {
   return await updateDoc(doc(db, "equipos", grupoId, "tareas", taskId), { solicitudPlazo: solicitud })
+}
+
+export const aceptarPlazoGrupoTask = async (grupoId, taskId, nuevaFechaLimite) => {
+  const data = { solicitudPlazo: deleteField(), plazoRechazado: deleteField() }
+  if (nuevaFechaLimite) {
+    data.fechaLimite = nuevaFechaLimite
+    data.plazoAceptado = { nuevaFecha: nuevaFechaLimite }
+  }
+  return await updateDoc(doc(db, "equipos", grupoId, "tareas", taskId), data)
+}
+
+export const rechazarPlazoGrupoTask = async (grupoId, taskId) => {
+  return await updateDoc(doc(db, "equipos", grupoId, "tareas", taskId), {
+    solicitudPlazo: deleteField(),
+    plazoAceptado: deleteField(),
+    plazoRechazado: true,
+  })
+}
+
+export const dismissPlazoGrupoResultado = async (grupoId, taskId) => {
+  return await updateDoc(doc(db, "equipos", grupoId, "tareas", taskId), {
+    plazoAceptado: deleteField(),
+    plazoRechazado: deleteField(),
+  })
 }
 
 // ── Retroalimentación (subcollection) ────────────────────────────────────

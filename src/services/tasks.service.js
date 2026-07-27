@@ -54,3 +54,27 @@ export const solicitarPlazoTask = async (colleagueId, taskId, solicitud) => {
 export const cancelarPlazoTask = async (colleagueId, taskId) => {
   return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), { solicitudPlazo: deleteField() })
 }
+
+export const aceptarPlazoTask = async (colleagueId, taskId, nuevaFechaLimite) => {
+  const data = { solicitudPlazo: deleteField(), plazoRechazado: deleteField() }
+  if (nuevaFechaLimite) {
+    data.fechaLimite = nuevaFechaLimite
+    data.plazoAceptado = { nuevaFecha: nuevaFechaLimite }
+  }
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), data)
+}
+
+export const rechazarPlazoTask = async (colleagueId, taskId) => {
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), {
+    solicitudPlazo: deleteField(),
+    plazoAceptado: deleteField(),
+    plazoRechazado: true,
+  })
+}
+
+export const dismissPlazoResultadoTask = async (colleagueId, taskId) => {
+  return await updateDoc(doc(db, "companeros", colleagueId, "tareas", taskId), {
+    plazoAceptado: deleteField(),
+    plazoRechazado: deleteField(),
+  })
+}
