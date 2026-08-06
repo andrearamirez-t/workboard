@@ -1,8 +1,10 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth"
-import { doc, getDoc, collection, getDocs, updateDoc, arrayUnion } from "firebase/firestore"
+import { doc, getDoc, collection, getDocs, updateDoc, arrayUnion, query, where } from "firebase/firestore"
 import { auth, googleProvider, db } from "@/services/firebase"
 import { getColleagueByEmail, linkColleagueUid } from "@/services/colleagues.service"
+
+const SUPER_ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
 // Agrega el uid del usuario a memberUids en todos los grupos donde ya aparece en miembros
 async function backfillMemberUids(companionId, uid) {
@@ -32,6 +34,8 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState(null)
   const [myColleagueId, setMyColleagueId] = useState(null)
+  const [mySemilleroId, setMySemilleroId] = useState(null)
+  const [isCoordinador, setIsCoordinador] = useState(false)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -81,11 +85,37 @@ export function AuthProvider({ children }) {
         setAuthError(null)
         setUser(null)
         setMyColleagueId(null)
+        setMySemilleroId(null)
+        setIsCoordinador(false)
       }
       setLoading(false)
     })
     return unsubscribe
   }, [])
+
+  // Resolve semillero & coordinator role once auth + myColleagueId are ready
+  useEffect(() => {
+    if (!user) return
+    if (SUPER_ADMIN_EMAILS.includes(user.email)) return // super-admins don't need a fixed semilleroId
+    let cancelled = false
+    ;(async () => {
+      try {
+        const q = query(collection(db, "semilleros"), where("coordinadores", "array-contains", user.uid))
+        const snap = await getDocs(q)
+        if (cancelled) return
+        if (!snap.empty) {
+          setIsCoordinador(true)
+          setMySemilleroId(snap.docs[0].id)
+          return
+        }
+        if (myColleagueId) {
+          const cSnap = await getDoc(doc(db, "companeros", myColleagueId))
+          if (!cancelled && cSnap.exists()) setMySemilleroId(cSnap.data().semilleroId || null)
+        }
+      } catch {}
+    })()
+    return () => { cancelled = true }
+  }, [user, myColleagueId])
 
   const loginWithGoogle = async () => {
     try {
@@ -99,7 +129,7 @@ export function AuthProvider({ children }) {
   const logout = () => signOut(auth)
 
   return (
-    <AuthContext.Provider value={{ user, loading, loginWithGoogle, logout, authError, myColleagueId }}>
+    <AuthContext.Provider value={{ user, loading, loginWithGoogle, logout, authError, myColleagueId, mySemilleroId, isCoordinador }}>
       {children}
     </AuthContext.Provider>
   )

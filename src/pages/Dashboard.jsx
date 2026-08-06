@@ -1,17 +1,23 @@
 import { useEffect, useState, useRef } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useParams } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
-import { getColleagues } from "@/services/colleagues.service"
+import { getColleaguesBySemillero, bulkCreateColleagues, deleteColleague } from "@/services/colleagues.service"
+import { getSemillero } from "@/services/semilleros.service"
+import { parseColleaguesFile } from "@/utils/parseColleaguesFile"
 import { getAllLogs } from "@/services/logs.service"
 import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
-import { UserCircle, Search, Users, BarChart2, Plus, Pencil, Trash2, X, Upload } from "lucide-react"
+import {
+  UserCircle, Search, Users, Plus, Pencil, Trash2, X, Upload,
+  LayoutGrid, LayoutList, MoreHorizontal, Briefcase, Wrench,
+  LogOut, HelpCircle, Copy, ExternalLink, TrendingUp, Menu, Home, CheckSquare
+} from "lucide-react"
 import { NotificationBell } from "@/components/ui/NotificationBell"
 import { Tutorial, resetTutorial } from "@/components/ui/Tutorial"
 import { MetricsDashboard } from "@/components/ui/MetricsDashboard"
 import { TeamDashboard } from "@/components/ui/TeamDashboard"
-import { getEquipos, createEquipo, updateEquipo, deleteEquipo } from "@/services/equipos.service"
+import { getEquiposBySemillero, createEquipo, updateEquipo, deleteEquipo } from "@/services/equipos.service"
 import { queueGrupoNotification, queueParticipanteGrupoNotification } from "@/services/wpp.service"
 import { crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { importGroupContacts, getGroupContactsCount } from "@/services/groups.service"
@@ -25,27 +31,84 @@ function hashHue(str) {
   return Math.abs(h * 137.508) % 360
 }
 
+function workloadRingColor(count) {
+  if (count === 0) return "var(--border)"
+  if (count <= 2) return "oklch(0.52 0.13 165)"
+  if (count <= 4) return "oklch(0.75 0.15 80)"
+  return "oklch(0.577 0.245 27.325)"
+}
+
+function workloadLabel(count) {
+  if (count === 0) return "Sin proyectos"
+  if (count <= 2) return "Disponible"
+  if (count <= 4) return "Ocupado"
+  return "Alta carga"
+}
+
+function WorkloadRing({ count, size = 52, children }) {
+  const r = (size / 2) - 4
+  const circumference = 2 * Math.PI * r
+  const ratio = Math.min(1, count / 4)
+  const dashOffset = circumference * (1 - ratio)
+  const color = workloadRingColor(count)
+  return (
+    <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="absolute inset-0" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border)" strokeWidth={2.5} />
+        {count > 0 && (
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={2.5}
+            strokeDasharray={circumference} strokeDashoffset={dashOffset}
+            strokeLinecap="round" style={{ transition: "stroke-dashoffset 0.7s ease" }} />
+        )}
+      </svg>
+      <div className="absolute rounded-full overflow-hidden"
+        style={{ inset: 5, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
+  const { semilleroId } = useParams()
   const { user, logout, myColleagueId } = useAuth()
-  const isAdmin = ADMIN_EMAILS.includes(user?.email)
+  const isSuperAdmin = ADMIN_EMAILS.includes(user?.email)
+
+  const [semillero, setSemillero] = useState(null)
+
+  // isAdmin = super admin OR coordinator of this semillero
+  const isAdmin = isSuperAdmin || (semillero?.coordinadores?.includes(user?.uid) ?? false)
+
   const [colleagues, setColleagues] = useState([])
   const [loadingData, setLoadingData] = useState(true)
   const [search, setSearch] = useState("")
-  const [hoveredId, setHoveredId] = useState(null)
-  const [showTutorial, setShowTutorial] = useState(false)
-  const [tab, setTab] = useState("equipo") // "resumen" | "equipo" | "equipos" | "metricas"
+  const [tab, setTab] = useState("equipo")
   const [logs, setLogs] = useState([])
-  // Equipos state
+
+  const [viewMode, setViewMode] = useState("grid")
+  const [filterRole, setFilterRole] = useState(null)
+  const [filterArea, setFilterArea] = useState(null)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [openCardMenu, setOpenCardMenu] = useState(null)
+  const [showTutorial, setShowTutorial] = useState(false)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+
+  const [importColleaguesPreview, setImportColleaguesPreview] = useState(null)
+  const [importColleaguesLoading, setImportColleaguesLoading] = useState(false)
+  const [importColleaguesSaving, setImportColleaguesSaving] = useState(false)
+  const [importColleaguesResult, setImportColleaguesResult] = useState(null)
+  const [importColleaguesError, setImportColleaguesError] = useState("")
+  const colleaguesFileRef = useRef(null)
+
   const [equipos, setEquipos] = useState([])
   const [equipoForm, setEquipoForm] = useState({ nombre: "", descripcion: "", color: "295", esPrueba: false })
   const [showEquipoForm, setShowEquipoForm] = useState(false)
   const [editingEquipo, setEditingEquipo] = useState(null)
   const [savingEquipo, setSavingEquipo] = useState(false)
-
   const [participantCounts, setParticipantCounts] = useState({})
 
-  // Importar participantes
   const contactsInputRef = useRef(null)
   const importingEquipoIdRef = useRef(null)
   const [importPreview, setImportPreview] = useState(null)
@@ -56,22 +119,34 @@ export default function Dashboard() {
   const [importSuccessCount, setImportSuccessCount] = useState(null)
 
   useEffect(() => {
-    if (!user) return
+    if (!semilleroId) return
+    getSemillero(semilleroId).then(s => setSemillero(s)).catch(() => {})
+  }, [semilleroId])
+
+  useEffect(() => {
+    if (!user || !semilleroId) return
     setLoadingData(true)
-    Promise.all([getColleagues(), getAllLogs(), getEquipos().catch(() => [])]).then(([cols, ls, eqs]) => {
+    Promise.all([getColleaguesBySemillero(semilleroId), getAllLogs(), getEquiposBySemillero(semilleroId).catch(() => [])]).then(([cols, ls, eqs]) => {
       setColleagues(cols)
       setLogs(ls)
       setEquipos(eqs)
       setLoadingData(false)
-      // Cargar conteo de participantes por grupo en paralelo
       if (ADMIN_EMAILS.includes(user.email)) {
         Promise.all(eqs.map(eq => getGroupContactsCount(eq.id).then(n => [eq.id, n]).catch(() => [eq.id, 0])))
           .then(pairs => setParticipantCounts(Object.fromEntries(pairs)))
       }
     })
-  }, [user])
+  }, [user, semilleroId])
 
-  const reloadEquipos = () => getEquipos().then(eqs => {
+  useEffect(() => {
+    if (!openCardMenu) return
+    const handler = () => setOpenCardMenu(null)
+    document.addEventListener("click", handler)
+    return () => document.removeEventListener("click", handler)
+  }, [openCardMenu])
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+  const reloadEquipos = () => getEquiposBySemillero(semilleroId).then(eqs => {
     setEquipos(eqs)
     if (ADMIN_EMAILS.includes(user?.email)) {
       Promise.all(eqs.map(eq => getGroupContactsCount(eq.id).then(n => [eq.id, n]).catch(() => [eq.id, 0])))
@@ -106,7 +181,6 @@ export default function Dashboard() {
     setImportError("")
     try {
       await importGroupContacts(equipoId, importPreview, user?.email)
-      // Encolar notificaciones WhatsApp si el grupo NO es de prueba
       const grupo = equipos.find(e => e.id === equipoId)
       if (grupo && !grupo.esPrueba) {
         importPreview.forEach(contacto =>
@@ -133,7 +207,12 @@ export default function Dashboard() {
     setSavingEquipo(true)
     try {
       if (editingEquipo) {
-        await updateEquipo(editingEquipo.id, { nombre: equipoForm.nombre.trim(), descripcion: equipoForm.descripcion.trim(), color: equipoForm.color, esPrueba: !!equipoForm.esPrueba })
+        await updateEquipo(editingEquipo.id, {
+          nombre: equipoForm.nombre.trim(),
+          descripcion: equipoForm.descripcion.trim(),
+          color: equipoForm.color,
+          esPrueba: !!equipoForm.esPrueba,
+        })
       } else {
         await createEquipo({
           nombre: equipoForm.nombre.trim(),
@@ -142,12 +221,13 @@ export default function Dashboard() {
           esPrueba: !!equipoForm.esPrueba,
           miembros: myColleagueId ? [myColleagueId] : [],
           memberUids: user?.uid ? [user.uid] : [],
+          semilleroId,
         })
       }
       await reloadEquipos()
       setShowEquipoForm(false)
       setEditingEquipo(null)
-      setEquipoForm({ nombre: "", descripcion: "", color: "295" })
+      setEquipoForm({ nombre: "", descripcion: "", color: "295", esPrueba: false })
     } catch (e) {
       console.error("Error guardando equipo:", e)
     } finally {
@@ -183,14 +263,48 @@ export default function Dashboard() {
           tipo: "invitado_grupo",
           titulo: "Te han invitado a un grupo",
           subtitulo: eq.nombre,
-          path: `/grupo/${equipoId}`,
+          path: `/semillero/${semilleroId}/grupo/${equipoId}`,
+          semilleroId,
         }).catch(() => {})
       }
     } catch (e) { console.error(e) }
     reloadEquipos().catch(() => {})
   }
 
-  // Map colleagueId → equipo nombre for badge
+  const handleColleaguesFileSelected = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    setImportColleaguesError("")
+    setImportColleaguesLoading(true)
+    try {
+      const parsed = await parseColleaguesFile(file)
+      setImportColleaguesPreview(parsed)
+    } catch (err) {
+      setImportColleaguesError(err.message)
+    } finally {
+      setImportColleaguesLoading(false)
+    }
+  }
+
+  const handleConfirmImportColleagues = async () => {
+    if (!importColleaguesPreview?.length) return
+    setImportColleaguesSaving(true)
+    setImportColleaguesError("")
+    try {
+      const { ok, fail } = await bulkCreateColleagues(importColleaguesPreview, semilleroId, user?.uid)
+      setImportColleaguesResult({ ok, fail })
+      setImportColleaguesPreview(null)
+      const refreshed = await getColleaguesBySemillero(semilleroId)
+      setColleagues(refreshed)
+    } catch (err) {
+      setImportColleaguesError(`Error al guardar: ${err?.message || "permisos insuficientes"}`)
+    } finally {
+      setImportColleaguesSaving(false)
+    }
+  }
+
+  // ── Computed ──────────────────────────────────────────────────────────────
   const colleagueEquipoMap = {}
   equipos.forEach(eq => (eq.miembros || []).forEach(cid => { colleagueEquipoMap[cid] = eq }))
 
@@ -198,588 +312,865 @@ export default function Dashboard() {
 
   const totalProjects = colleagues.reduce((sum, c) => sum + (c.proyectos?.length || 0), 0)
   const totalTools = new Set(colleagues.flatMap(c => c.herramientas || [])).size
+  const colleaguesWithProjects = colleagues.filter(c => (c.proyectos?.length || 0) > 0).length
+
+  const allAvances = colleagues.flatMap(c => (c.proyectos || []).map(p => p.avance ?? 0))
+  const avgProgress = allAvances.length
+    ? Math.round(allAvances.reduce((a, b) => a + b, 0) / allAvances.length)
+    : 0
+
+  const toolCounts = {}
+  colleagues.forEach(c => (c.herramientas || []).forEach(t => { toolCounts[t] = (toolCounts[t] || 0) + 1 }))
+  const topTool = Object.entries(toolCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || null
+
+  const allRoles = [...new Set(colleagues.map(c => c.rol).filter(Boolean))]
+  const allAreas = [...new Set(colleagues.map(c => c.area).filter(Boolean))]
 
   const filtered = colleagues
     .filter(c => {
       const q = search.toLowerCase()
-      return !q ||
+      const matchesSearch = !q ||
         c.nombre?.toLowerCase().includes(q) ||
         c.rol?.toLowerCase().includes(q) ||
         c.herramientas?.some(t => t.toLowerCase().includes(q)) ||
         c.area?.toLowerCase().includes(q)
+      const matchesRole = !filterRole || c.rol === filterRole
+      const matchesArea = !filterArea || c.area === filterArea
+      return matchesSearch && matchesRole && matchesArea
     })
     .sort((a, b) => (b.id === myColleagueId ? 1 : 0) - (a.id === myColleagueId ? 1 : 0))
 
   const userInitial = user?.displayName?.charAt(0)?.toUpperCase() || user?.email?.charAt(0)?.toUpperCase() || "?"
+  const userName = user?.displayName || user?.email?.split("@")[0] || "Usuario"
+  const userFirstName = userName.split(" ")[0]
 
-  return (
-    <div className="min-h-screen bg-background flex flex-col">
+  const navItems = [
+    ...(isAdmin ? [{ key: "resumen", label: "Resumen", icon: Home }] : []),
+    { key: "equipo", label: "Mi equipo", icon: UserCircle },
+    { key: "equipos", label: "Grupos", icon: Users },
+    ...(isAdmin ? [{ key: "metricas", label: "Análisis", icon: TrendingUp }] : []),
+  ]
 
-      {/* ── Header ── */}
-      <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
-        style={{ backgroundColor: "color-mix(in srgb, var(--background) 82%, transparent)", backdropFilter: "blur(20px)" }}>
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold select-none"
-            style={{ background: "linear-gradient(140deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))", boxShadow: "0 2px 8px oklch(0.52 0.13 165 / 32%)" }}>
-            W
-          </div>
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">Workboard</span>
+  const pageTitle = {
+    resumen: "Resumen del equipo",
+    equipo: "Mi equipo",
+    equipos: "Grupos",
+    metricas: "Análisis & Reportes",
+  }[tab]
+
+  // ── SIDEBAR ───────────────────────────────────────────────────────────────
+  const Sidebar = (
+    <aside
+      className={`fixed top-0 left-0 bottom-0 z-50 flex flex-col border-r border-border/50
+        transition-transform duration-300 ease-in-out
+        lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+      style={{ width: 228, background: "var(--sidebar)" }}>
+
+      {/* Logo */}
+      <button
+        className="px-5 pt-6 pb-5 flex items-center gap-3 flex-shrink-0 w-full text-left hover:opacity-80 transition-opacity"
+        onClick={() => navigate(isSuperAdmin ? "/overview" : `/semillero/${semilleroId}/dashboard`)}>
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-[15px] font-black flex-shrink-0"
+          style={{
+            background: "linear-gradient(140deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))",
+            boxShadow: "0 4px 14px oklch(0.52 0.13 165 / 40%)",
+          }}>
+          W
         </div>
-        <div className="flex items-center gap-1.5">
-          <span data-tour="bell">
-            <NotificationBell isAdmin={isAdmin} myColleagueId={myColleagueId} userEmail={user?.email} userUid={user?.uid} />
-          </span>
-          <ThemeToggle />
-          <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold select-none cursor-default"
-            style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))", boxShadow: "0 2px 6px oklch(0.52 0.13 165 / 28%)" }}
-            title={user?.displayName || user?.email}>
+        <div className="min-w-0">
+          <p className="text-[14px] font-bold text-foreground leading-none">Workboard</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5 leading-none truncate">
+            {semillero?.nombre || "CUN · Investigación"}
+          </p>
+        </div>
+      </button>
+
+      {/* Divider */}
+      <div className="mx-4 h-px bg-border/70 flex-shrink-0" />
+
+      {/* User card */}
+      <div className="px-4 py-4 flex-shrink-0">
+        <div className="flex items-center gap-2.5 px-3 py-3 rounded-xl"
+          style={{ background: "oklch(0.52 0.13 165 / 0.08)" }}>
+          <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[12px] font-bold flex-shrink-0"
+            style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))" }}>
             {userInitial}
           </div>
-          <button
-            onClick={() => { resetTutorial(user?.email); setShowTutorial(true) }}
-            className="w-7 h-7 flex items-center justify-center rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors text-[12px] font-bold"
-            title="Ver tutorial">
-            ?
-          </button>
-          <Button variant="outline" size="sm" onClick={logout} className="text-[13px] h-8">
-            Salir
-          </Button>
-        </div>
-      </header>
-
-      <main className="px-6 py-8 max-w-6xl mx-auto w-full flex-1">
-
-        {/* ── Page header ── */}
-        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
-          <div>
-            <h2 className="text-[30px] font-bold tracking-tight text-foreground leading-none">
-              {tab === "resumen" ? "Resumen del equipo" : tab === "equipo" ? "Mi equipo" : tab === "equipos" ? "Grupos" : "Análisis & Reportes"}
-            </h2>
-            <p className="text-[13px] text-muted-foreground mt-1.5">
-              Investigación e innovación · {colleagues.length} persona{colleagues.length !== 1 ? "s" : ""}
+          <div className="min-w-0 flex-1">
+            <p className="text-[12px] font-semibold text-foreground truncate leading-snug">
+              {userFirstName}
+            </p>
+            <p className="text-[10px] truncate leading-snug"
+              style={{ color: "oklch(0.52 0.13 165)" }}>
+              {isSuperAdmin ? "Super Admin" : isAdmin ? "Coordinador" : "Miembro"}
             </p>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {isAdmin && tab === "equipo" && (
-              <Button size="sm" className="h-8 text-[13px]" onClick={() => navigate("/colleague/new")}>
-                + Compañero
-              </Button>
-            )}
-            {tab === "equipos" && (
-              <Button size="sm" className="h-8 text-[13px]"
-                onClick={() => { setEditingEquipo(null); setEquipoForm({ nombre: "", descripcion: "", color: "295" }); setShowEquipoForm(true) }}>
-                <Plus size={13} className="mr-1" /> Nuevo grupo
-              </Button>
-            )}
-          </div>
         </div>
+      </div>
 
-        {/* ── Tabs ── */}
-        <div className="flex gap-1 mb-6 border-b border-border">
-          {[
-            ...(isAdmin ? [
-              { key: "resumen", label: "Resumen", icon: <BarChart2 size={14} /> },
-            ] : []),
-            { key: "equipo", label: "Mi equipo", icon: <UserCircle size={14} /> },
-            { key: "equipos", label: "Grupos", icon: <Users size={14} /> },
-            ...(isAdmin ? [
-              { key: "metricas", label: "Análisis", icon: <BarChart2 size={14} /> },
-            ] : []),
-          ].map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)}
-              className="flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-all border-b-2 -mb-px"
-              style={{
-                borderColor: tab === t.key ? "var(--primary)" : "transparent",
-                color: tab === t.key ? "var(--primary)" : "var(--muted-foreground)",
-              }}>
-              {t.icon}{t.label}
+      {/* Nav */}
+      <nav className="flex-1 px-3 py-1 space-y-0.5 overflow-y-auto">
+        {isSuperAdmin && (
+          <button
+            onClick={() => navigate("/overview")}
+            className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all mb-2 text-left"
+            style={{ color: "var(--muted-foreground)" }}
+            onMouseEnter={e => { e.currentTarget.style.background = "var(--muted)"; e.currentTarget.style.color = "var(--foreground)" }}
+            onMouseLeave={e => { e.currentTarget.style.background = ""; e.currentTarget.style.color = "var(--muted-foreground)" }}>
+            <Home size={15} className="flex-shrink-0" />
+            Página principal
+          </button>
+        )}
+        <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest px-3 mb-3">
+          Menú principal
+        </p>
+        {navItems.map(t => {
+          const Icon = t.icon
+          const active = tab === t.key
+          return (
+            <button key={t.key}
+              onClick={() => { setTab(t.key); setSidebarOpen(false) }}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all text-left"
+              style={active ? {
+                background: "var(--primary)",
+                color: "oklch(1 0 0)",
+                boxShadow: "0 4px 18px oklch(0.52 0.13 165 / 30%)",
+              } : {
+                color: "var(--muted-foreground)",
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "var(--muted)" }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "" }}>
+              <Icon size={16} className="flex-shrink-0" />
+              {t.label}
             </button>
-          ))}
-        </div>
+          )
+        })}
+      </nav>
 
-        {/* ══ TAB: RESUMEN (solo admin) ═══════════════════════════════════ */}
-        {isAdmin && tab === "resumen" && (
-          <TeamDashboard colleagues={colleagues} logs={logs} />
-        )}
+      {/* Divider */}
+      <div className="mx-4 h-px bg-border/70 flex-shrink-0" />
 
-        {/* ══ TAB: MI EQUIPO ══════════════════════════════════════════════ */}
-        {tab === "equipo" && <>
+      {/* Bottom actions */}
+      <div className="px-3 py-4 space-y-0.5 flex-shrink-0">
+        <button
+          onClick={() => { resetTutorial(user?.email); setShowTutorial(true); setSidebarOpen(false) }}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted text-left">
+          <HelpCircle size={16} className="flex-shrink-0" />
+          Tutorial
+        </button>
+        <button
+          onClick={logout}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors hover:bg-muted text-left"
+          style={{ color: "var(--destructive)" }}>
+          <LogOut size={16} className="flex-shrink-0" />
+          Cerrar sesión
+        </button>
+      </div>
+    </aside>
+  )
 
-        {/* ── Stats strip skeleton ── */}
-        {loadingData && (
-          <div className="grid grid-cols-3 gap-3 mb-7">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="rounded-2xl border border-border px-5 py-4 animate-pulse bg-card">
-                <div className="h-8 w-10 rounded-lg bg-muted mb-2" />
-                <div className="h-3 w-20 rounded bg-muted mb-1.5" />
-                <div className="h-2.5 w-16 rounded bg-muted" />
-              </div>
-            ))}
-          </div>
-        )}
+  return (
+    <div className="min-h-screen bg-background flex">
 
-        {/* ── Stats strip ── */}
-        {!loadingData && colleagues.length > 0 && (
-          <div className="grid grid-cols-3 gap-3 mb-7">
-            {[
-              { value: colleagues.length, label: "Personas", sub: "en el equipo" },
-              { value: totalProjects, label: "Proyectos", sub: "registrados" },
-              { value: totalTools, label: "Herramientas", sub: "en uso" },
-            ].map((stat, i) => {
-              const statHue = [295, 260, 180][i]
-              return (
-                <div key={stat.label} className="relative overflow-hidden rounded-2xl border border-border px-5 py-4"
-                  style={{
-                    background: `linear-gradient(135deg, var(--card), oklch(0.60 0.14 ${statHue} / 0.06))`,
-                    boxShadow: "0 2px 12px oklch(0 0 0 / 6%)",
-                  }}>
-                  <div className="absolute top-0 right-0 w-20 h-20 pointer-events-none opacity-20"
-                    style={{ background: `radial-gradient(circle at top right, oklch(0.65 0.18 ${statHue}), transparent 70%)`, filter: "blur(20px)" }} />
-                  <p className="text-[32px] font-bold text-foreground leading-none">{stat.value}</p>
-                  <p className="text-[13px] font-semibold text-foreground mt-1">{stat.label}</p>
-                  <p className="text-[11px] text-muted-foreground">{stat.sub}</p>
-                </div>
-              )
-            })}
-          </div>
-        )}
+      {/* Mobile backdrop */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 lg:hidden"
+          style={{ background: "oklch(0 0 0 / 45%)", backdropFilter: "blur(2px)" }}
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
 
-        {/* ── Search ── */}
-        {!loadingData && colleagues.length > 0 && (
-          <div className="relative mb-4" data-tour="search">
-            <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              placeholder="Buscar por nombre, rol, herramienta o enfoque…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full h-10 bg-card border border-border rounded-xl pl-9 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30 transition-all"
-            />
-          </div>
-        )}
+      {Sidebar}
 
+      {/* ── MAIN AREA ───────────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-h-screen" style={{ marginLeft: 0 }}
+        /* On desktop, push right of sidebar */
+      >
+        <style>{`@media (min-width: 1024px) { .main-offset { margin-left: 228px; } }`}</style>
+        <div className="main-offset flex flex-col min-h-screen flex-1">
 
-        {/* ── States ── */}
-        {loadingData ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[0, 1, 2, 3, 4, 5].map(i => (
-              <div key={i} className="rounded-2xl border border-border bg-card p-5 animate-pulse">
-                <div className="flex items-start gap-3 mb-4">
-                  <div className="w-11 h-11 rounded-xl bg-muted flex-shrink-0" />
-                  <div className="flex-1 space-y-2 pt-1">
-                    <div className="h-3.5 bg-muted rounded w-3/4" />
-                    <div className="h-3 bg-muted rounded w-1/2" />
-                  </div>
-                </div>
-                <div className="space-y-2 mb-4">
-                  <div className="h-3 bg-muted rounded w-full" />
-                  <div className="h-3 bg-muted rounded w-4/5" />
-                </div>
-                <div className="flex gap-1.5 mb-4">
-                  <div className="h-5 w-14 bg-muted rounded-md" />
-                  <div className="h-5 w-16 bg-muted rounded-md" />
-                  <div className="h-5 w-12 bg-muted rounded-md" />
-                </div>
-                <div className="pt-3 border-t border-border flex justify-between">
-                  <div className="h-3 w-20 bg-muted rounded" />
-                  <div className="h-3 w-16 bg-muted rounded" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : colleagues.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-28 text-muted-foreground animate-fade-up">
-            <div className="w-14 h-14 rounded-2xl mb-4 flex items-center justify-center"
-              style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
-              <UserCircle size={26} style={{ color: "oklch(0.52 0.13 165)" }} />
+          {/* ── TOP BAR ─────────────────────────────────────────────────── */}
+          <header className="sticky top-0 z-20 h-14 border-b border-border/60 px-5 flex items-center gap-3"
+            style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
+
+            {/* Mobile hamburger */}
+            <button
+              className="lg:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted transition-colors flex-shrink-0"
+              onClick={() => setSidebarOpen(v => !v)}>
+              <Menu size={16} className="text-muted-foreground" />
+            </button>
+
+            {/* Page breadcrumb */}
+            <div className="hidden lg:flex items-center gap-2">
+              <span className="text-[12px] text-muted-foreground">Workboard</span>
+              {semillero?.nombre && (
+                <>
+                  <span className="text-[12px] text-muted-foreground">/</span>
+                  <span className="text-[12px] text-muted-foreground">{semillero.nombre}</span>
+                </>
+              )}
+              <span className="text-[12px] text-muted-foreground">/</span>
+              <span className="text-[13px] font-semibold text-foreground">{pageTitle}</span>
             </div>
-            <p className="font-semibold text-foreground text-[15px]">Sin compañeros aún</p>
-            <p className="text-[13px] mt-1">Agrega el primero para empezar.</p>
-            {isAdmin && (
-              <Button size="sm" className="mt-5" onClick={() => navigate("/colleague/new")}>
-                + Agregar compañero
-              </Button>
+
+            {/* Mobile: page title */}
+            <span className="lg:hidden text-[14px] font-semibold text-foreground">{pageTitle}</span>
+
+            {/* Right side */}
+            <div className="ml-auto flex items-center gap-2">
+              {isAdmin && tab === "equipo" && !selectionMode && (
+                <>
+                  <input ref={colleaguesFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleColleaguesFileSelected} />
+                  <Button size="sm" variant="outline" className="h-8 text-[13px]"
+                    onClick={() => colleaguesFileRef.current?.click()}
+                    disabled={importColleaguesLoading}>
+                    <Upload size={13} className="mr-1" /> {importColleaguesLoading ? "Leyendo…" : "Importar"}
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-8 text-[13px]"
+                    onClick={() => { setSelectionMode(true); setSelectedIds(new Set()) }}>
+                    <CheckSquare size={13} className="mr-1" /> Seleccionar
+                  </Button>
+                  <Button size="sm" className="h-8 text-[13px]" onClick={() => navigate(`/semillero/${semilleroId}/colleague/new`)}>
+                    <Plus size={13} className="mr-1" /> Compañero
+                  </Button>
+                </>
+              )}
+              {isAdmin && tab === "equipo" && selectionMode && (
+                <>
+                  <span className="text-[13px] text-muted-foreground mr-1">
+                    {selectedIds.size} seleccionado{selectedIds.size !== 1 ? "s" : ""}
+                  </span>
+                  <Button size="sm" variant="outline" className="h-8 text-[13px]"
+                    onClick={() => { setSelectionMode(false); setSelectedIds(new Set()) }}>
+                    Cancelar
+                  </Button>
+                  <Button size="sm" className="h-8 text-[13px] font-semibold"
+                    disabled={selectedIds.size === 0}
+                    style={selectedIds.size > 0 ? { background: "var(--destructive)", color: "#fff" } : {}}
+                    onClick={async () => {
+                      if (!confirm(`¿Eliminar ${selectedIds.size} compañero${selectedIds.size !== 1 ? "s" : ""}? Esta acción no se puede deshacer.`)) return
+                      await Promise.all([...selectedIds].map(id => deleteColleague(id).catch(() => {})))
+                      setColleagues(prev => prev.filter(x => !selectedIds.has(x.id)))
+                      setSelectionMode(false)
+                      setSelectedIds(new Set())
+                    }}>
+                    <Trash2 size={13} className="mr-1" /> Eliminar {selectedIds.size > 0 ? selectedIds.size : ""}
+                  </Button>
+                </>
+              )}
+              {tab === "equipos" && (
+                <Button size="sm" className="h-8 text-[13px]"
+                  onClick={() => { setEditingEquipo(null); setEquipoForm({ nombre: "", descripcion: "", color: "295", esPrueba: false }); setShowEquipoForm(true) }}>
+                  <Plus size={13} className="mr-1" /> Nuevo grupo
+                </Button>
+              )}
+              <span data-tour="bell">
+                <NotificationBell isAdmin={isAdmin} myColleagueId={myColleagueId} userEmail={user?.email} userUid={user?.uid} semilleroId={semilleroId} />
+              </span>
+              <ThemeToggle />
+            </div>
+          </header>
+
+          {/* ── PAGE CONTENT ────────────────────────────────────────────── */}
+          <main className="flex-1 p-5 sm:p-7">
+
+            {/* ══ RESUMEN ═══════════════════════════════════════════════════ */}
+            {isAdmin && tab === "resumen" && (
+              <TeamDashboard colleagues={colleagues} logs={logs} />
             )}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-20 text-muted-foreground">
-            <p className="text-[15px] font-semibold text-foreground mb-1">Sin resultados</p>
-            <p className="text-[13px]">Intenta con otro término o enfoque.</p>
-          </div>
-        ) : (
 
-          /* ── Cards grid ── */
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-tour="cards">
-            {filtered.map((c) => {
-              const h = c.colorHue ?? hashHue(c.id)
-              const isHovered = hoveredId === c.id
-              return (
-                <a key={c.id} href={`/colleague/${c.id}`}
-                  className="group block rounded-2xl overflow-hidden cursor-pointer relative"
-                  onMouseEnter={() => setHoveredId(c.id)}
-                  onMouseLeave={() => setHoveredId(null)}
+            {/* ══ MÉTRICAS ══════════════════════════════════════════════════ */}
+            {tab === "metricas" && (
+              <MetricsDashboard colleagues={colleagues} logs={logs} />
+            )}
+
+            {/* ══ MI EQUIPO ═════════════════════════════════════════════════ */}
+            {tab === "equipo" && (
+              <div className="space-y-6">
+
+                {/* Hero banner */}
+                <div className="relative overflow-hidden rounded-2xl px-7 py-7"
                   style={{
-                    background: `linear-gradient(150deg, var(--card), oklch(0.60 0.14 ${h} / 0.06))`,
-                    border: "1px solid var(--border)",
-                    borderLeft: `3px solid oklch(0.62 0.18 ${h})`,
-                    transition: "transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.22s ease",
-                    transform: isHovered ? "translateY(-4px)" : "translateY(0)",
-                    boxShadow: isHovered
-                      ? `0 24px 60px oklch(0.55 0.18 ${h} / 20%), 0 8px 24px oklch(0 0 0 / 14%), 0 0 0 1px oklch(0.62 0.18 ${h} / 14%)`
-                      : "0 2px 10px oklch(0 0 0 / 7%)",
+                    background: "linear-gradient(125deg, oklch(0.46 0.13 165) 0%, oklch(0.40 0.14 185) 45%, oklch(0.48 0.14 245) 100%)",
+                    boxShadow: "0 8px 32px oklch(0.52 0.13 165 / 25%)",
                   }}>
+                  <div className="absolute -top-16 -right-16 w-56 h-56 rounded-full opacity-10 pointer-events-none"
+                    style={{ background: "radial-gradient(circle, oklch(1 0 0), transparent 70%)" }} />
+                  <div className="absolute -bottom-10 -left-10 w-40 h-40 rounded-full opacity-8 pointer-events-none"
+                    style={{ background: "radial-gradient(circle, oklch(0.58 0.16 295), transparent 70%)" }} />
+                  <p className="text-[11px] font-semibold uppercase tracking-widest mb-1.5"
+                    style={{ color: "oklch(1 0 0 / 0.55)" }}>
+                    Investigación e Innovación · CUN
+                  </p>
+                  <h3 className="text-[24px] font-bold text-white leading-tight mb-1">
+                    Hola, {userFirstName}
+                  </h3>
+                  <p className="text-[13px]" style={{ color: "oklch(1 0 0 / 0.65)" }}>
+                    {loadingData
+                      ? "Cargando datos del equipo…"
+                      : `${colleagues.length} personas · ${totalProjects} proyectos · ${totalTools} herramientas`}
+                  </p>
+                </div>
 
-                  {/* Top glow on hover */}
-                  <div className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                    style={{ background: `radial-gradient(ellipse at 60% -10%, oklch(0.68 0.18 ${h} / 0.10), transparent 65%)` }} />
-
-                  <div className="p-5 space-y-3.5 relative">
-
-                    {/* Avatar + Name + Role */}
-                    <div className="flex items-start gap-3">
-                      <div className="relative flex-shrink-0">
-                        <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-[16px] overflow-hidden"
-                          style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))` }}>
-                          {c.avatarUrl
-                            ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
-                            : c.avatarEmoji
-                              ? <span className="text-xl leading-none">{c.avatarEmoji}</span>
-                              : c.nombre?.charAt(0).toUpperCase()
-                          }
+                {/* Stat cards */}
+                {loadingData ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    {[0, 1, 2].map(i => (
+                      <div key={i} className="rounded-2xl border border-border bg-card p-5 animate-pulse">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className="w-11 h-11 rounded-xl bg-muted flex-shrink-0" />
+                          <div className="space-y-2 flex-1">
+                            <div className="h-3 w-16 bg-muted rounded" />
+                            <div className="h-6 w-10 bg-muted rounded" />
+                          </div>
                         </div>
-                        <div className="absolute -inset-1.5 rounded-xl -z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                          style={{ background: `oklch(0.62 0.18 ${h} / 0.28)`, filter: "blur(10px)" }} />
+                        <div className="h-1.5 bg-muted rounded-full" />
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <p className="font-bold text-[15px] text-foreground leading-tight">{c.nombre}</p>
-                          {c.id === myColleagueId && (
-                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 tracking-wide"
-                              style={{ backgroundColor: "oklch(0.52 0.13 165 / 0.14)", color: "oklch(0.42 0.13 165)" }}>
-                              TÚ
-                            </span>
-                          )}
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    {[
+                      {
+                        icon: <Users size={20} />,
+                        value: colleagues.length,
+                        label: "Personas",
+                        sub: `${colleaguesWithProjects} con proyectos activos`,
+                        progress: colleagues.length > 0 ? colleaguesWithProjects / colleagues.length : 0,
+                        hue: 165,
+                      },
+                      {
+                        icon: <Briefcase size={20} />,
+                        value: totalProjects,
+                        label: "Proyectos",
+                        sub: `Avance promedio: ${avgProgress}%`,
+                        progress: avgProgress / 100,
+                        hue: 230,
+                      },
+                      {
+                        icon: <Wrench size={20} />,
+                        value: totalTools,
+                        label: "Herramientas",
+                        sub: topTool ? `Más usada: ${topTool}` : "en uso en el equipo",
+                        progress: Math.min(1, totalTools / 20),
+                        hue: 295,
+                      },
+                    ].map((stat) => (
+                      <div key={stat.label} className="relative overflow-hidden rounded-2xl border border-border bg-card flex gap-4 items-start p-5">
+                        {/* Floating icon box */}
+                        <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white flex-shrink-0 mt-0.5"
+                          style={{
+                            background: `linear-gradient(135deg, oklch(0.62 0.18 ${stat.hue}), oklch(0.50 0.20 ${(stat.hue + 20) % 360}))`,
+                            boxShadow: `0 6px 18px oklch(0.60 0.18 ${stat.hue} / 35%)`,
+                          }}>
+                          {stat.icon}
                         </div>
-                        <p className="text-[12px] text-muted-foreground mt-0.5 truncate">{c.rol || "Sin rol"}</p>
-                        <div className="flex flex-wrap gap-1 mt-1.5">
-                          {c.area && (
-                            <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full leading-4"
-                              style={{ backgroundColor: `oklch(0.60 0.18 ${h} / 0.13)`, color: `oklch(0.50 0.20 ${h})` }}>
-                              {c.area}
-                            </span>
-                          )}
-                          {colleagueEquipoMap[c.id] && (
-                            <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-full leading-4"
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide leading-none mb-1">
+                            {stat.label}
+                          </p>
+                          <p className="text-[28px] font-black text-foreground leading-none mb-1">{stat.value}</p>
+                          <p className="text-[11px] text-muted-foreground truncate mb-3">{stat.sub}</p>
+                          <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div className="h-full rounded-full transition-all duration-700"
                               style={{
-                                backgroundColor: `oklch(0.62 0.22 ${colleagueEquipoMap[c.id].color || "295"} / 0.13)`,
-                                color: `oklch(0.52 0.22 ${colleagueEquipoMap[c.id].color || "295"})`,
-                              }}>
-                              <Users size={9} />
-                              {colleagueEquipoMap[c.id].nombre}
-                            </span>
-                          )}
+                                width: `${Math.round(stat.progress * 100)}%`,
+                                background: `oklch(0.62 0.18 ${stat.hue})`,
+                              }} />
+                          </div>
                         </div>
+                        {/* Glow bg */}
+                        <div className="absolute top-0 right-0 w-20 h-20 pointer-events-none opacity-15"
+                          style={{ background: `radial-gradient(circle at top right, oklch(0.65 0.18 ${stat.hue}), transparent 70%)`, filter: "blur(16px)" }} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Filter bar */}
+                {!loadingData && colleagues.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1" data-tour="search">
+                        <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                        <input
+                          type="text"
+                          placeholder="Buscar persona, rol o herramienta…"
+                          value={search}
+                          onChange={e => setSearch(e.target.value)}
+                          className="w-full h-9 bg-card border border-border rounded-xl pl-9 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 focus:border-primary/40 transition-all"
+                        />
+                      </div>
+                      <div className="flex items-center gap-0.5 bg-muted/60 rounded-lg p-0.5 flex-shrink-0">
+                        <button onClick={() => setViewMode("grid")} title="Vista cuadrícula"
+                          className="w-8 h-8 flex items-center justify-center rounded-md transition-all"
+                          style={viewMode === "grid" ? { background: "var(--card)", boxShadow: "0 1px 3px oklch(0 0 0 / 10%)" } : {}}>
+                          <LayoutGrid size={14} className={viewMode === "grid" ? "text-foreground" : "text-muted-foreground"} />
+                        </button>
+                        <button onClick={() => setViewMode("list")} title="Vista lista"
+                          className="w-8 h-8 flex items-center justify-center rounded-md transition-all"
+                          style={viewMode === "list" ? { background: "var(--card)", boxShadow: "0 1px 3px oklch(0 0 0 / 10%)" } : {}}>
+                          <LayoutList size={14} className={viewMode === "list" ? "text-foreground" : "text-muted-foreground"} />
+                        </button>
                       </div>
                     </div>
-
-                    {/* Working on */}
-                    {c.trabajaEn && (
-                      <p className="text-[12.5px] text-muted-foreground line-clamp-2 leading-relaxed">{c.trabajaEn}</p>
-                    )}
-
-                    {/* Tools */}
-                    {c.herramientas?.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {c.herramientas.slice(0, 4).map(tool => (
-                          <span key={tool} className="text-[11px] px-2 py-0.5 rounded-md font-medium"
-                            style={{ backgroundColor: `oklch(0.60 0.10 ${h} / 0.10)`, color: `oklch(0.62 0.12 ${h})` }}>
-                            {tool}
-                          </span>
+                    {(allRoles.length > 0 || allAreas.length > 0) && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                          Filtrar:
+                        </span>
+                        {allRoles.slice(0, 4).map(role => (
+                          <button key={role}
+                            onClick={() => setFilterRole(filterRole === role ? null : role)}
+                            className="h-7 px-2.5 rounded-lg text-[11px] font-medium border transition-all whitespace-nowrap"
+                            style={filterRole === role ? {
+                              background: "oklch(0.52 0.13 165)",
+                              color: "oklch(1 0 0)",
+                              borderColor: "oklch(0.52 0.13 165)",
+                            } : {
+                              background: "var(--card)",
+                              color: "var(--muted-foreground)",
+                              borderColor: "var(--border)",
+                            }}>
+                            {role.split(" ").slice(0, 2).join(" ")}
+                          </button>
                         ))}
-                        {c.herramientas.length > 4 && (
-                          <span className="text-[11px] px-1.5 py-0.5 text-muted-foreground">
-                            +{c.herramientas.length - 4}
-                          </span>
+                        {allAreas.slice(0, 3).map(area => (
+                          <button key={area}
+                            onClick={() => setFilterArea(filterArea === area ? null : area)}
+                            className="h-7 px-2.5 rounded-lg text-[11px] font-medium border transition-all whitespace-nowrap"
+                            style={filterArea === area ? {
+                              background: "oklch(0.62 0.12 230)",
+                              color: "oklch(1 0 0)",
+                              borderColor: "oklch(0.62 0.12 230)",
+                            } : {
+                              background: "var(--card)",
+                              color: "var(--muted-foreground)",
+                              borderColor: "var(--border)",
+                            }}>
+                            {area}
+                          </button>
+                        ))}
+                        {(filterRole || filterArea) && (
+                          <button
+                            onClick={() => { setFilterRole(null); setFilterArea(null) }}
+                            className="h-7 px-2.5 rounded-lg text-[11px] font-medium border border-border text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+                            <X size={11} /> Limpiar
+                          </button>
                         )}
                       </div>
                     )}
-
-                    {/* Card footer */}
-                    <div className="flex items-center justify-between pt-3 border-t border-border">
-                      <div className="flex items-center gap-2">
-                        {/* Project dots */}
-                        <div className="flex gap-0.5 items-center">
-                          {(c.proyectos?.length || 0) === 0 ? (
-                            <div className="w-2 h-2 rounded-full bg-border" />
-                          ) : (
-                            Array.from({ length: Math.min(c.proyectos.length, 5) }).map((_, i) => (
-                              <div key={i} className="w-2 h-2 rounded-full"
-                                style={{ backgroundColor: `oklch(0.60 0.18 ${h} / ${i === 0 ? 0.9 : 0.35})` }} />
-                            ))
-                          )}
-                          {(c.proyectos?.length || 0) > 5 && (
-                            <span className="text-[10px] text-muted-foreground ml-0.5">+{c.proyectos.length - 5}</span>
-                          )}
-                        </div>
-                        <span className="text-[11.5px] text-muted-foreground">
-                          {c.proyectos?.length || 0} proyecto{c.proyectos?.length !== 1 ? "s" : ""}
-                        </span>
-                      </div>
-                      <span className="text-[12px] font-semibold text-muted-foreground group-hover:text-primary transition-colors flex items-center gap-0.5">
-                        Ver perfil
-                        <span className="inline-block transition-transform duration-150 group-hover:translate-x-0.5 ml-0.5">→</span>
-                      </span>
-                    </div>
-
                   </div>
-                </a>
-              )
-            })}
-          </div>
-        )}
+                )}
 
-        </> /* fin tab equipo */}
-
-        {/* ══ TAB: MÉTRICAS ════════════════════════════════════════════════ */}
-        {tab === "metricas" && (
-          <MetricsDashboard colleagues={colleagues} logs={logs} />
-        )}
-
-        {/* ══ TAB: GRUPOS ══════════════════════════════════════════════════ */}
-        {tab === "equipos" && (
-          <div className="space-y-4">
-
-            {/* Formulario crear nuevo grupo */}
-            {showEquipoForm && !editingEquipo && (
-              <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
-                <p className="text-[13px] font-semibold text-foreground">Nuevo grupo</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <input placeholder="Nombre del grupo *" value={equipoForm.nombre}
-                    onChange={e => setEquipoForm(f => ({ ...f, nombre: e.target.value }))}
-                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
-                  <input placeholder="Descripción (opcional)" value={equipoForm.descripcion}
-                    onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
-                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
-                </div>
-                <div className="flex items-center gap-2">
-                  <p className="text-[12px] text-muted-foreground">Color:</p>
-                  {["295", "27", "145", "55", "316", "180"].map(hue => (
-                    <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
-                      className="w-5 h-5 rounded-full transition-transform hover:scale-110"
-                      style={{ background: `oklch(0.62 0.22 ${hue})`, outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none", outlineOffset: 2 }} />
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
-                    {savingEquipo ? "Guardando…" : "Crear grupo"}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setShowEquipoForm(false)}>Cancelar</Button>
-                </div>
-              </div>
-            )}
-
-            {/* Formulario editar grupo (panel separado arriba) */}
-            {editingEquipo && (
-              <div className="bg-card border border-border rounded-2xl p-5 space-y-4"
-                style={{ borderLeft: `3px solid oklch(0.62 0.22 ${equipoForm.color || "295"})` }}>
-                <div className="flex items-center justify-between">
-                  <p className="text-[13px] font-semibold text-foreground">Editando: {editingEquipo.nombre}</p>
-                  <button
-                    onClick={() => { importingEquipoIdRef.current = editingEquipo.id; setImportingEquipoId(editingEquipo.id); setImportPreview(null); setImportError(""); contactsInputRef.current?.click() }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all hover:brightness-110 active:scale-95"
-                    style={{ background: `oklch(0.62 0.20 ${equipoForm.color || "295"})`, color: "#fff", boxShadow: `0 2px 8px oklch(0.52 0.20 ${equipoForm.color || "295"} / 35%)` }}>
-                    <Upload size={12} />
-                    Importar participantes
-                  </button>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <input placeholder="Nombre *" value={equipoForm.nombre}
-                    onChange={e => setEquipoForm(f => ({ ...f, nombre: e.target.value }))}
-                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
-                  <input placeholder="Descripción (opcional)" value={equipoForm.descripcion}
-                    onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
-                    className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
-                </div>
-                <div className="flex items-center gap-2">
-                  <p className="text-[12px] text-muted-foreground">Color:</p>
-                  {["295", "27", "145", "55", "316", "180"].map(hue => (
-                    <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
-                      className="w-5 h-5 rounded-full transition-transform hover:scale-110"
-                      style={{ background: `oklch(0.62 0.22 ${hue})`, outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none", outlineOffset: 2 }} />
-                  ))}
-                </div>
-
-                {/* Lista unificada: todos los compañeros, toggleable */}
-                {(() => {
-                  const liveEquipo = equipos.find(e => e.id === editingEquipo.id) || editingEquipo
-                  const memberIds = new Set(liveEquipo.miembros || [])
-                  const memberCount = colleagues.filter(c => memberIds.has(c.id)).length
-                  return (
-                    <div>
-                      <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">
-                        Compañeros — {memberCount} en el grupo
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        {colleagues.map(c => {
-                          const ch = c.colorHue ?? hashHue(c.id)
-                          const isMember = memberIds.has(c.id)
-                          return (
-                            <button key={c.id}
-                              onClick={() => handleToggleMember(editingEquipo.id, c.id)}
-                              title={isMember ? `Quitar a ${c.nombre}` : `Agregar a ${c.nombre}`}
-                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-all"
-                              style={isMember ? {
-                                borderColor: `oklch(0.62 0.18 ${ch})`,
-                                background: `oklch(0.62 0.18 ${ch} / 0.12)`,
-                                color: "var(--foreground)",
-                              } : {
-                                borderColor: "var(--border)",
-                                background: "transparent",
-                                color: "var(--muted-foreground)",
-                              }}>
-                              <div className="w-5 h-5 rounded flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0 overflow-hidden"
-                                style={{ background: c.avatarUrl ? "var(--muted)" : `oklch(0.68 0.18 ${ch})` }}>
-                                {c.avatarUrl
-                                  ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
-                                  : c.avatarEmoji
-                                    ? <span className="text-xs leading-none">{c.avatarEmoji}</span>
-                                    : c.nombre?.charAt(0).toUpperCase()
-                                }
+                {/* Person grid / list / empty */}
+                {loadingData ? (
+                  <div className={viewMode === "grid" ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" : "space-y-2"}>
+                    {[0, 1, 2, 3, 4, 5].map(i => (
+                      <div key={i} className={`animate-pulse bg-card border border-border ${viewMode === "grid" ? "rounded-2xl p-5" : "rounded-xl px-5 py-4 flex items-center gap-4"}`}>
+                        {viewMode === "grid" ? (
+                          <>
+                            <div className="flex items-center gap-3 mb-4">
+                              <div className="w-12 h-12 rounded-full bg-muted flex-shrink-0" />
+                              <div className="flex-1 space-y-2">
+                                <div className="h-3.5 bg-muted rounded w-3/4" />
+                                <div className="h-3 bg-muted rounded w-1/2" />
                               </div>
-                              <span className="font-medium">{c.nombre?.split(" ").slice(0,2).join(" ")}</span>
-                              {c.rol && <span className="text-[10px] opacity-50">· {c.rol.split(" ")[0]}</span>}
-                              {isMember
-                                ? <X size={11} className="ml-0.5 flex-shrink-0" style={{ color: "oklch(0.60 0.18 27)" }} />
-                                : <Plus size={10} className="ml-0.5 opacity-40 flex-shrink-0" />
-                              }
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                   )
-                })()}
-
-                <div className="flex items-center gap-2 pt-1">
-                  <input type="checkbox" id="esPrueba" checked={!!equipoForm.esPrueba}
-                    onChange={e => setEquipoForm(f => ({ ...f, esPrueba: e.target.checked }))}
-                    className="w-4 h-4 accent-amber-500" />
-                  <label htmlFor="esPrueba" className="text-[12px] text-muted-foreground cursor-pointer select-none">
-                    Grupo de prueba — <span className="text-amber-500 font-medium">no enviar notificaciones de WhatsApp</span>
-                  </label>
-                </div>
-
-                <div className="flex gap-2 pt-1 border-t border-border">
-                  <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
-                    {savingEquipo ? "Guardando…" : "Guardar cambios"}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setEditingEquipo(null)}>Cancelar</Button>
-                </div>
-              </div>
-            )}
-
-            {/* Grid de grupos — estilo Mi equipo */}
-            {(() => {
-              const visibleEquipos = isAdmin
-                ? equipos
-                : equipos.filter(eq => (eq.miembros || []).includes(myColleagueId))
-              const emptyMsg = isAdmin ? "Crea el primero con el botón de arriba." : "Pídele al admin o a un compañero que te agregue."
-              return visibleEquipos.length === 0 && !showEquipoForm && !editingEquipo ? (
-              <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
-                <Users size={32} className="mb-3 opacity-30" />
-                <p className="font-semibold text-foreground text-[15px]">Sin grupos</p>
-                <p className="text-[13px] mt-1">{emptyMsg}</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {visibleEquipos.map(eq => {
-                  const eqColor = eq.color || "295"
-                  const miembros = (eq.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
-                  const isActive = editingEquipo?.id === eq.id
-                  return (
-                    <div key={eq.id}
-                      className="relative rounded-2xl overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
-                      onClick={() => navigate(`/grupo/${eq.id}`)}
-                      style={{
-                        background: `linear-gradient(150deg, var(--card), oklch(0.60 0.14 ${eqColor} / 0.06))`,
-                        border: "1px solid var(--border)",
-                        borderLeft: `3px solid oklch(0.62 0.18 ${eqColor})`,
-                        boxShadow: isActive ? `0 0 0 2px oklch(0.62 0.22 ${eqColor} / 40%)` : "0 2px 10px oklch(0 0 0 / 7%)",
-                      }}>
-                      <div className="p-5">
-                        {/* Header */}
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-0.5">
-                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                                style={{ background: `oklch(0.62 0.22 ${eqColor})` }} />
-                              <h3 className="font-bold text-foreground text-[15px] truncate">{eq.nombre}</h3>
                             </div>
-                            {eq.descripcion && (
-                              <p className="text-[12px] text-muted-foreground ml-4 truncate">{eq.descripcion}</p>
-                            )}
-                          </div>
-                          <div className="flex gap-2 ml-2 flex-shrink-0">
-                            <button onClick={e => { e.stopPropagation(); setEditingEquipo(eq); setEquipoForm({ nombre: eq.nombre, descripcion: eq.descripcion || "", color: eq.color || "295", esPrueba: !!eq.esPrueba }); setShowEquipoForm(false) }}
-                              className="text-[11px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5">
-                              <Pencil size={11} />
-                            </button>
-                            <button onClick={e => { e.stopPropagation(); handleDeleteEquipo(eq.id) }}
-                              className="text-[11px] text-destructive/60 hover:text-destructive transition-colors flex items-center gap-0.5">
-                              <Trash2 size={11} />
-                            </button>
-                          </div>
-                        </div>
+                            <div className="h-1.5 bg-muted rounded-full mb-3" />
+                            <div className="flex gap-1.5">
+                              <div className="h-5 w-14 bg-muted rounded-full" />
+                              <div className="h-5 w-16 bg-muted rounded-full" />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="w-10 h-10 rounded-full bg-muted flex-shrink-0" />
+                            <div className="flex-1 space-y-2">
+                              <div className="h-3.5 bg-muted rounded w-1/3" />
+                              <div className="h-3 bg-muted rounded w-1/4" />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : colleagues.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
+                    <div className="w-16 h-16 rounded-2xl mb-4 flex items-center justify-center"
+                      style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
+                      <UserCircle size={28} style={{ color: "oklch(0.52 0.13 165)" }} />
+                    </div>
+                    <p className="font-semibold text-foreground text-[15px]">Sin compañeros aún</p>
+                    <p className="text-[13px] mt-1">Agrega el primero para empezar.</p>
+                    {isAdmin && (
+                      <Button size="sm" className="mt-5" onClick={() => navigate(`/semillero/${semilleroId}/colleague/new`)}>
+                        <Plus size={13} className="mr-1" /> Agregar compañero
+                      </Button>
+                    )}
+                  </div>
+                ) : filtered.length === 0 ? (
+                  <div className="text-center py-20">
+                    <Search size={28} className="mx-auto mb-3 text-muted-foreground opacity-30" />
+                    <p className="text-[15px] font-semibold text-foreground mb-1">Sin resultados</p>
+                    <p className="text-[13px] text-muted-foreground">Intenta con otro término o limpia los filtros.</p>
+                  </div>
+                ) : viewMode === "grid" ? (
 
-                        {/* Avatares apilados */}
-                        {miembros.length > 0 && (
-                          <div className="flex items-center gap-1.5 mb-3">
-                            <div className="flex -space-x-2">
-                              {miembros.slice(0, 5).map(c => {
-                                const ch = c.colorHue ?? hashHue(c.id)
-                                return (
-                                  <div key={c.id}
-                                    className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0 overflow-hidden"
-                                    style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}
-                                    title={c.nombre}>
-                                    {c.avatarUrl
-                                      ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
-                                      : c.avatarEmoji
-                                        ? <span className="text-sm leading-none">{c.avatarEmoji}</span>
-                                        : c.nombre?.charAt(0).toUpperCase()
-                                    }
-                                  </div>
-                                )
-                              })}
-                              {miembros.length > 5 && (
-                                <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground ring-2 ring-card">
-                                  +{miembros.length - 5}
+                  /* ── GRID ── */
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-tour="cards">
+                    {filtered.map((c) => {
+                      const h = c.colorHue ?? hashHue(c.id)
+                      const projectCount = c.proyectos?.length || 0
+                      const isSelected = selectedIds.has(c.id)
+                      return (
+                        <div key={c.id}
+                          className="group relative rounded-2xl bg-card border flex flex-col cursor-pointer"
+                          style={{
+                            transition: "transform 0.2s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s ease, border-color 0.2s ease",
+                            borderColor: isSelected ? `oklch(0.62 0.18 ${h})` : undefined,
+                            boxShadow: isSelected ? `0 0 0 2px oklch(0.62 0.18 ${h} / 0.35)` : undefined,
+                          }}
+                          onClick={() => {
+                            if (selectionMode) {
+                              setSelectedIds(prev => {
+                                const next = new Set(prev)
+                                next.has(c.id) ? next.delete(c.id) : next.add(c.id)
+                                return next
+                              })
+                            } else {
+                              navigate(`/semillero/${semilleroId}/colleague/${c.id}`)
+                            }
+                          }}
+                          onMouseEnter={e => {
+                            if (selectionMode) return
+                            e.currentTarget.style.transform = "translateY(-3px)"
+                            e.currentTarget.style.boxShadow = `0 16px 48px oklch(0.55 0.18 ${h} / 16%), 0 4px 16px oklch(0 0 0 / 10%)`
+                            e.currentTarget.style.borderColor = `oklch(0.62 0.18 ${h} / 0.4)`
+                          }}
+                          onMouseLeave={e => {
+                            if (selectionMode) return
+                            e.currentTarget.style.transform = ""
+                            e.currentTarget.style.boxShadow = ""
+                            e.currentTarget.style.borderColor = ""
+                          }}>
+
+                          {/* Top stripe */}
+                          <div className="h-[3px] w-full flex-shrink-0 rounded-tl-2xl rounded-tr-2xl"
+                            style={{ background: `linear-gradient(90deg, oklch(0.62 0.18 ${h}), oklch(0.55 0.18 ${(h + 40) % 360} / 0.4))` }} />
+
+                          <div className="flex-1 p-5 space-y-3.5 relative">
+
+                            {/* Selection checkbox */}
+                            {selectionMode && (
+                              <div className="absolute top-0 left-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all"
+                                style={{
+                                  borderColor: isSelected ? `oklch(0.62 0.18 ${h})` : "var(--border)",
+                                  background: isSelected ? `oklch(0.62 0.18 ${h})` : "var(--background)",
+                                }}>
+                                {isSelected && <svg viewBox="0 0 10 8" fill="none" className="w-[9px] h-[7px]"><path d="M1 4l2.5 2.5L9 1" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                              </div>
+                            )}
+
+                            {/* ⋮ menu */}
+                            <div className="absolute top-0 right-0" onClick={e => e.stopPropagation()}>
+                              <button
+                                onClick={e => { e.stopPropagation(); setOpenCardMenu(openCardMenu === c.id ? null : c.id) }}
+                                className={`w-7 h-7 rounded-lg flex items-center justify-center hover:bg-muted transition-all ${selectionMode ? "hidden" : "opacity-0 group-hover:opacity-100"}`}>
+                                <MoreHorizontal size={14} className="text-muted-foreground" />
+                              </button>
+                              {openCardMenu === c.id && (
+                                <div className="absolute right-0 top-8 w-44 bg-popover border border-border rounded-xl z-30 overflow-hidden"
+                                  style={{ boxShadow: "0 8px 32px oklch(0 0 0 / 20%)" }}>
+                                  <button
+                                    onClick={e => { e.stopPropagation(); navigate(`/semillero/${semilleroId}/colleague/${c.id}`); setOpenCardMenu(null) }}
+                                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-foreground hover:bg-muted transition-colors text-left">
+                                    <ExternalLink size={13} className="text-muted-foreground flex-shrink-0" />
+                                    Ver perfil
+                                  </button>
+                                  <button
+                                    onClick={e => {
+                                      e.stopPropagation()
+                                      navigator.clipboard?.writeText(c.correo || c.email || "")
+                                      setOpenCardMenu(null)
+                                    }}
+                                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-foreground hover:bg-muted transition-colors text-left">
+                                    <Copy size={13} className="text-muted-foreground flex-shrink-0" />
+                                    Copiar correo
+                                  </button>
+                                  {isAdmin && (
+                                    <>
+                                      <div className="mx-3 my-1 h-px bg-border" />
+                                      <button
+                                        onClick={async e => {
+                                          e.stopPropagation()
+                                          setOpenCardMenu(null)
+                                          if (!confirm(`¿Eliminar a ${c.nombre}?`)) return
+                                          await deleteColleague(c.id).catch(() => {})
+                                          setColleagues(prev => prev.filter(x => x.id !== c.id))
+                                        }}
+                                        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] font-semibold transition-colors text-left"
+                                        style={{ color: "var(--destructive)" }}
+                                        onMouseEnter={e => e.currentTarget.style.background = "oklch(0.577 0.245 27.325 / 0.10)"}
+                                        onMouseLeave={e => e.currentTarget.style.background = ""}>
+                                        <Trash2 size={13} className="flex-shrink-0" />
+                                        Eliminar
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               )}
                             </div>
-                            <span className="text-[11px] text-muted-foreground ml-1">
-                              {miembros.length} en la plataforma
-                            </span>
-                            {(participantCounts[eq.id] || eq.participantesCount || 0) > 0 && (
-                              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
-                                style={{ background: `oklch(0.62 0.18 ${eqColor} / 0.13)`, color: `oklch(0.48 0.20 ${eqColor})` }}>
-                                {participantCounts[eq.id] ?? eq.participantesCount} participantes
+
+                            {/* Avatar + Name */}
+                            <div className="flex items-start gap-3">
+                              <WorkloadRing count={projectCount} size={52}>
+                                <div className="w-full h-full flex items-center justify-center text-white font-bold text-[15px] overflow-hidden"
+                                  style={c.avatarUrl ? { background: "var(--muted)" } : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))` }}>
+                                  {c.avatarUrl
+                                    ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                                    : c.avatarEmoji
+                                      ? <span className="text-lg leading-none">{c.avatarEmoji}</span>
+                                      : c.nombre?.charAt(0).toUpperCase()
+                                  }
+                                </div>
+                              </WorkloadRing>
+                              <div className="flex-1 min-w-0 pt-0.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <p className="font-bold text-[15px] text-foreground leading-tight">{c.nombre}</p>
+                                  {c.id === myColleagueId && (
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full tracking-wide flex-shrink-0"
+                                      style={{ backgroundColor: "oklch(0.52 0.13 165 / 0.14)", color: "oklch(0.42 0.13 165)" }}>
+                                      TÚ
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[12px] text-muted-foreground mt-0.5 truncate">{c.rol || "Sin rol"}</p>
+                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                  {c.area && (
+                                    <span className="inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full leading-4"
+                                      style={{ backgroundColor: `oklch(0.60 0.18 ${h} / 0.13)`, color: `oklch(0.50 0.20 ${h})` }}>
+                                      {c.area}
+                                    </span>
+                                  )}
+                                  {colleagueEquipoMap[c.id] && (
+                                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-full leading-4"
+                                      style={{
+                                        backgroundColor: `oklch(0.62 0.22 ${colleagueEquipoMap[c.id].color || "295"} / 0.13)`,
+                                        color: `oklch(0.52 0.22 ${colleagueEquipoMap[c.id].color || "295"})`,
+                                      }}>
+                                      <Users size={9} />
+                                      {colleagueEquipoMap[c.id].nombre}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {c.trabajaEn && (
+                              <p className="text-[12px] text-muted-foreground line-clamp-2 leading-relaxed">{c.trabajaEn}</p>
+                            )}
+
+                            {/* Workload bar */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="text-[11px] text-muted-foreground">
+                                  {projectCount} proyecto{projectCount !== 1 ? "s" : ""}
+                                </span>
+                                <span className="text-[10px] font-semibold" style={{ color: workloadRingColor(projectCount) }}>
+                                  {workloadLabel(projectCount)}
+                                </span>
+                              </div>
+                              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                <div className="h-full rounded-full transition-all duration-500"
+                                  style={{ width: `${Math.min(100, projectCount * 25)}%`, background: workloadRingColor(projectCount) }} />
+                              </div>
+                            </div>
+
+                            {/* Tool chips */}
+                            {c.herramientas?.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {c.herramientas.slice(0, 3).map(tool => (
+                                  <span key={tool}
+                                    className="text-[10px] px-2 py-0.5 rounded-full border font-medium whitespace-nowrap"
+                                    style={{
+                                      borderColor: `oklch(0.62 0.12 ${h} / 0.25)`,
+                                      color: `oklch(0.55 0.12 ${h})`,
+                                      background: `oklch(0.62 0.10 ${h} / 0.07)`,
+                                    }}>
+                                    {tool}
+                                  </span>
+                                ))}
+                                {c.herramientas.length > 3 && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full border border-border text-muted-foreground cursor-default"
+                                    title={c.herramientas.slice(3).join(", ")}>
+                                    +{c.herramientas.length - 3}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                ) : (
+
+                  /* ── LIST ── */
+                  <div className="space-y-1.5" data-tour="cards">
+                    {filtered.map((c) => {
+                      const h = c.colorHue ?? hashHue(c.id)
+                      const projectCount = c.proyectos?.length || 0
+                      return (
+                        <a key={c.id} href={`/semillero/${semilleroId}/colleague/${c.id}`}
+                          className="group flex items-center gap-4 bg-card border border-border rounded-xl px-5 py-3.5 hover:border-primary/25 hover:shadow-sm transition-all"
+                          style={{ borderLeft: `3px solid oklch(0.62 0.18 ${h})` }}>
+                          <WorkloadRing count={projectCount} size={44}>
+                            <div className="w-full h-full flex items-center justify-center text-white font-bold text-[13px] overflow-hidden"
+                              style={c.avatarUrl ? { background: "var(--muted)" } : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))` }}>
+                              {c.avatarUrl
+                                ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                                : c.avatarEmoji
+                                  ? <span className="text-base leading-none">{c.avatarEmoji}</span>
+                                  : c.nombre?.charAt(0).toUpperCase()
+                              }
+                            </div>
+                          </WorkloadRing>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="font-semibold text-[14px] text-foreground">{c.nombre}</p>
+                              {c.id === myColleagueId && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full tracking-wide"
+                                  style={{ backgroundColor: "oklch(0.52 0.13 165 / 0.14)", color: "oklch(0.42 0.13 165)" }}>
+                                  TÚ
+                                </span>
+                              )}
+                              {c.area && (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full hidden sm:inline-block"
+                                  style={{ backgroundColor: `oklch(0.60 0.18 ${h} / 0.10)`, color: `oklch(0.50 0.20 ${h})` }}>
+                                  {c.area}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[12px] text-muted-foreground truncate">{c.rol || "Sin rol"}</p>
+                          </div>
+                          <div className="hidden sm:flex gap-1 flex-wrap max-w-[140px] justify-end">
+                            {(c.herramientas || []).slice(0, 2).map(t => (
+                              <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-full border border-border text-muted-foreground whitespace-nowrap">{t}</span>
+                            ))}
+                            {(c.herramientas || []).length > 2 && (
+                              <span className="text-[10px] text-muted-foreground" title={(c.herramientas || []).slice(2).join(", ")}>
+                                +{c.herramientas.length - 2}
                               </span>
                             )}
                           </div>
-                        )}
+                          <div className="hidden md:flex flex-col gap-1 w-20 flex-shrink-0">
+                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div className="h-full rounded-full"
+                                style={{ width: `${Math.min(100, projectCount * 25)}%`, background: workloadRingColor(projectCount) }} />
+                            </div>
+                            <span className="text-[10px] text-muted-foreground text-right">{projectCount} proy.</span>
+                          </div>
+                          <span className="text-muted-foreground group-hover:text-primary transition-colors flex-shrink-0">→</span>
+                        </a>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
-                        {/* Lista de nombres clicables */}
-                        <div className="space-y-1.5">
-                          {miembros.length === 0 ? (
-                            <p className="text-[12px] text-muted-foreground italic">Sin miembros. Usa el lápiz para agregar.</p>
-                          ) : (
-                            miembros.map(c => {
+            {/* ══ GRUPOS ════════════════════════════════════════════════════ */}
+            {tab === "equipos" && (
+              <div className="space-y-4">
+
+                {showEquipoForm && !editingEquipo && (
+                  <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
+                    <p className="text-[13px] font-semibold text-foreground">Nuevo grupo</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input placeholder="Nombre del grupo *" value={equipoForm.nombre}
+                        onChange={e => setEquipoForm(f => ({ ...f, nombre: e.target.value }))}
+                        className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                      <input placeholder="Descripción (opcional)" value={equipoForm.descripcion}
+                        onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
+                        className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-[12px] text-muted-foreground">Color:</p>
+                      {["295", "27", "145", "55", "316", "180"].map(hue => (
+                        <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
+                          className="w-5 h-5 rounded-full transition-transform hover:scale-110"
+                          style={{ background: `oklch(0.62 0.22 ${hue})`, outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none", outlineOffset: 2 }} />
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
+                        {savingEquipo ? "Guardando…" : "Crear grupo"}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setShowEquipoForm(false)}>Cancelar</Button>
+                    </div>
+                  </div>
+                )}
+
+                {editingEquipo && (
+                  <div className="bg-card border border-border rounded-2xl p-5 space-y-4"
+                    style={{ borderLeft: `3px solid oklch(0.62 0.22 ${equipoForm.color || "295"})` }}>
+                    <div className="flex items-center justify-between">
+                      <p className="text-[13px] font-semibold text-foreground">Editando: {editingEquipo.nombre}</p>
+                      <button
+                        onClick={() => { importingEquipoIdRef.current = editingEquipo.id; setImportingEquipoId(editingEquipo.id); setImportPreview(null); setImportError(""); contactsInputRef.current?.click() }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all hover:brightness-110 active:scale-95"
+                        style={{ background: `oklch(0.62 0.20 ${equipoForm.color || "295"})`, color: "#fff", boxShadow: `0 2px 8px oklch(0.52 0.20 ${equipoForm.color || "295"} / 35%)` }}>
+                        <Upload size={12} />
+                        Importar participantes
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input placeholder="Nombre *" value={equipoForm.nombre}
+                        onChange={e => setEquipoForm(f => ({ ...f, nombre: e.target.value }))}
+                        className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                      <input placeholder="Descripción (opcional)" value={equipoForm.descripcion}
+                        onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
+                        className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-[12px] text-muted-foreground">Color:</p>
+                      {["295", "27", "145", "55", "316", "180"].map(hue => (
+                        <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
+                          className="w-5 h-5 rounded-full transition-transform hover:scale-110"
+                          style={{ background: `oklch(0.62 0.22 ${hue})`, outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none", outlineOffset: 2 }} />
+                      ))}
+                    </div>
+                    {(() => {
+                      const liveEquipo = equipos.find(e => e.id === editingEquipo.id) || editingEquipo
+                      const memberIds = new Set(liveEquipo.miembros || [])
+                      const memberCount = colleagues.filter(c => memberIds.has(c.id)).length
+                      return (
+                        <div>
+                          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">
+                            Compañeros — {memberCount} en el grupo
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {colleagues.map(c => {
                               const ch = c.colorHue ?? hashHue(c.id)
+                              const isMember = memberIds.has(c.id)
                               return (
-                                <a key={c.id} href={`/colleague/${c.id}`} onClick={e => e.stopPropagation()}
-                                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-muted/60 transition-colors group">
-                                  <div className="w-6 h-6 rounded flex items-center justify-center text-white font-bold text-[10px] flex-shrink-0 overflow-hidden"
+                                <button key={c.id}
+                                  onClick={() => handleToggleMember(editingEquipo.id, c.id)}
+                                  title={isMember ? `Quitar a ${c.nombre}` : `Agregar a ${c.nombre}`}
+                                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] border transition-all"
+                                  style={isMember ? {
+                                    borderColor: `oklch(0.62 0.18 ${ch})`,
+                                    background: `oklch(0.62 0.18 ${ch} / 0.12)`,
+                                    color: "var(--foreground)",
+                                  } : {
+                                    borderColor: "var(--border)",
+                                    background: "transparent",
+                                    color: "var(--muted-foreground)",
+                                  }}>
+                                  <div className="w-5 h-5 rounded flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0 overflow-hidden"
                                     style={{ background: c.avatarUrl ? "var(--muted)" : `oklch(0.68 0.18 ${ch})` }}>
                                     {c.avatarUrl
                                       ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
@@ -788,31 +1179,253 @@ export default function Dashboard() {
                                         : c.nombre?.charAt(0).toUpperCase()
                                     }
                                   </div>
-                                  <span className="text-[12px] font-medium text-foreground truncate flex-1">
-                                    {c.nombre?.split(" ").slice(0,2).join(" ")}
-                                  </span>
-                                  <span className="text-[10px] text-muted-foreground truncate">{c.rol?.split(" ")[0]}</span>
-                                  <span className="text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity ml-auto">→</span>
-                                </a>
+                                  <span className="font-medium">{c.nombre?.split(" ").slice(0, 2).join(" ")}</span>
+                                  {c.rol && <span className="text-[10px] opacity-50">· {c.rol.split(" ")[0]}</span>}
+                                  {isMember
+                                    ? <X size={11} className="ml-0.5 flex-shrink-0" style={{ color: "oklch(0.60 0.18 27)" }} />
+                                    : <Plus size={10} className="ml-0.5 opacity-40 flex-shrink-0" />
+                                  }
+                                </button>
                               )
-                            })
-                          )}
+                            })}
+                          </div>
                         </div>
-                      </div>
+                      )
+                    })()}
+                    <div className="flex items-center gap-2 pt-1">
+                      <input type="checkbox" id="esPrueba" checked={!!equipoForm.esPrueba}
+                        onChange={e => setEquipoForm(f => ({ ...f, esPrueba: e.target.checked }))}
+                        className="w-4 h-4 accent-amber-500" />
+                      <label htmlFor="esPrueba" className="text-[12px] text-muted-foreground cursor-pointer select-none">
+                        Grupo de prueba — <span className="text-amber-500 font-medium">no enviar notificaciones de WhatsApp</span>
+                      </label>
+                    </div>
+                    <div className="flex gap-2 pt-1 border-t border-border">
+                      <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
+                        {savingEquipo ? "Guardando…" : "Guardar cambios"}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditingEquipo(null)}>Cancelar</Button>
+                    </div>
+                  </div>
+                )}
+
+                {(() => {
+                  const visibleEquipos = isAdmin
+                    ? equipos
+                    : equipos.filter(eq => (eq.miembros || []).includes(myColleagueId))
+                  const emptyMsg = isAdmin ? "Crea el primero con el botón de arriba." : "Pídele al admin que te agregue."
+                  return visibleEquipos.length === 0 && !showEquipoForm && !editingEquipo ? (
+                    <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
+                      <Users size={32} className="mb-3 opacity-30" />
+                      <p className="font-semibold text-foreground text-[15px]">Sin grupos</p>
+                      <p className="text-[13px] mt-1">{emptyMsg}</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {visibleEquipos.map(eq => {
+                        const eqColor = eq.color || "295"
+                        const miembros = (eq.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
+                        const isActive = editingEquipo?.id === eq.id
+                        return (
+                          <div key={eq.id}
+                            className="relative rounded-2xl overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
+                            onClick={() => navigate(`/semillero/${semilleroId}/grupo/${eq.id}`)}
+                            style={{
+                              background: `linear-gradient(150deg, var(--card), oklch(0.60 0.14 ${eqColor} / 0.06))`,
+                              border: "1px solid var(--border)",
+                              borderLeft: `3px solid oklch(0.62 0.18 ${eqColor})`,
+                              boxShadow: isActive ? `0 0 0 2px oklch(0.62 0.22 ${eqColor} / 40%)` : "0 2px 10px oklch(0 0 0 / 7%)",
+                            }}>
+                            <div className="p-5">
+                              <div className="flex items-start justify-between mb-3">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                                      style={{ background: `oklch(0.62 0.22 ${eqColor})` }} />
+                                    <h3 className="font-bold text-foreground text-[15px] truncate">{eq.nombre}</h3>
+                                  </div>
+                                  {eq.descripcion && (
+                                    <p className="text-[12px] text-muted-foreground ml-4 truncate">{eq.descripcion}</p>
+                                  )}
+                                </div>
+                                {isAdmin && (
+                                  <div className="flex gap-2 ml-2 flex-shrink-0">
+                                    <button onClick={e => { e.stopPropagation(); setEditingEquipo(eq); setEquipoForm({ nombre: eq.nombre, descripcion: eq.descripcion || "", color: eq.color || "295", esPrueba: !!eq.esPrueba }); setShowEquipoForm(false) }}
+                                      className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+                                      <Pencil size={11} />
+                                    </button>
+                                    <button onClick={e => { e.stopPropagation(); handleDeleteEquipo(eq.id) }}
+                                      className="text-[11px] text-destructive/60 hover:text-destructive transition-colors">
+                                      <Trash2 size={11} />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                              {miembros.length > 0 && (
+                                <div className="flex items-center gap-1.5 mb-3">
+                                  <div className="flex -space-x-2">
+                                    {miembros.slice(0, 5).map(c => {
+                                      const ch = c.colorHue ?? hashHue(c.id)
+                                      return (
+                                        <div key={c.id}
+                                          className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0 overflow-hidden"
+                                          style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch + 40) % 360}))` }}
+                                          title={c.nombre}>
+                                          {c.avatarUrl
+                                            ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                                            : c.avatarEmoji
+                                              ? <span className="text-sm leading-none">{c.avatarEmoji}</span>
+                                              : c.nombre?.charAt(0).toUpperCase()
+                                          }
+                                        </div>
+                                      )
+                                    })}
+                                    {miembros.length > 5 && (
+                                      <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground ring-2 ring-card">
+                                        +{miembros.length - 5}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <span className="text-[11px] text-muted-foreground ml-1">{miembros.length} en la plataforma</span>
+                                  {(participantCounts[eq.id] || eq.participantesCount || 0) > 0 && (
+                                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                                      style={{ background: `oklch(0.62 0.18 ${eqColor} / 0.13)`, color: `oklch(0.48 0.20 ${eqColor})` }}>
+                                      {participantCounts[eq.id] ?? eq.participantesCount} participantes
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              <div className="space-y-1.5">
+                                {miembros.length === 0 ? (
+                                  <p className="text-[12px] text-muted-foreground italic">Sin miembros. Usa el lápiz para agregar.</p>
+                                ) : (
+                                  miembros.map(c => {
+                                    const ch = c.colorHue ?? hashHue(c.id)
+                                    return (
+                                      <a key={c.id} href={`/semillero/${semilleroId}/colleague/${c.id}`} onClick={e => e.stopPropagation()}
+                                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-muted/60 transition-colors group">
+                                        <div className="w-6 h-6 rounded flex items-center justify-center text-white font-bold text-[10px] flex-shrink-0 overflow-hidden"
+                                          style={{ background: c.avatarUrl ? "var(--muted)" : `oklch(0.68 0.18 ${ch})` }}>
+                                          {c.avatarUrl
+                                            ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                                            : c.avatarEmoji
+                                              ? <span className="text-xs leading-none">{c.avatarEmoji}</span>
+                                              : c.nombre?.charAt(0).toUpperCase()
+                                          }
+                                        </div>
+                                        <span className="text-[12px] font-medium text-foreground truncate flex-1">
+                                          {c.nombre?.split(" ").slice(0, 2).join(" ")}
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground truncate">{c.rol?.split(" ")[0]}</span>
+                                        <span className="text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity ml-auto">→</span>
+                                      </a>
+                                    )
+                                  })
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   )
-                })}
+                })()}
               </div>
-            )
-            })()}
+            )}
+
+          </main>
+
+          <Footer />
+        </div>
+      </div>
+
+      {/* ══ IMPORT COMPAÑEROS MODAL ════════════════════════════════════════ */}
+      {(importColleaguesPreview || importColleaguesSaving || importColleaguesResult || importColleaguesError) && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ background: "oklch(0 0 0 / 50%)", backdropFilter: "blur(4px)" }}>
+          <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
+              <div>
+                <p className="font-semibold text-foreground text-[15px]">Importar compañeros</p>
+                {importColleaguesPreview && (
+                  <p className="text-[12px] text-muted-foreground">{importColleaguesPreview.length} personas detectadas</p>
+                )}
+              </div>
+              <button onClick={() => { setImportColleaguesPreview(null); setImportColleaguesResult(null); setImportColleaguesError("") }}
+                className="text-muted-foreground hover:text-foreground transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+              {importColleaguesResult ? (
+                <div className="flex flex-col items-center justify-center py-8 gap-3">
+                  <div className="w-14 h-14 rounded-full flex items-center justify-center text-2xl"
+                    style={{ background: "oklch(0.52 0.13 165 / 0.12)" }}>✓</div>
+                  <p className="font-semibold text-foreground text-[15px]">
+                    {importColleaguesResult.ok} compañero{importColleaguesResult.ok !== 1 ? "s" : ""} importado{importColleaguesResult.ok !== 1 ? "s" : ""}
+                  </p>
+                  {importColleaguesResult.fail > 0 && (
+                    <p className="text-[13px] text-muted-foreground">{importColleaguesResult.fail} fallaron</p>
+                  )}
+                </div>
+              ) : importColleaguesPreview ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="border-b border-border text-left">
+                        <th className="pb-2 pr-4 font-semibold text-muted-foreground uppercase tracking-wide">#</th>
+                        <th className="pb-2 pr-4 font-semibold text-muted-foreground uppercase tracking-wide">Nombre</th>
+                        <th className="pb-2 pr-4 font-semibold text-muted-foreground uppercase tracking-wide">Correo</th>
+                        <th className="pb-2 pr-4 font-semibold text-muted-foreground uppercase tracking-wide">WhatsApp</th>
+                        <th className="pb-2 font-semibold text-muted-foreground uppercase tracking-wide">Info</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importColleaguesPreview.map((c, i) => (
+                        <tr key={i} className="border-b border-border/50">
+                          <td className="py-2 pr-4 text-muted-foreground">{i + 1}</td>
+                          <td className="py-2 pr-4 font-medium text-foreground">{c.nombre || <span className="text-muted-foreground italic">—</span>}</td>
+                          <td className="py-2 pr-4 text-muted-foreground">{c.email || "—"}</td>
+                          <td className="py-2 pr-4 text-muted-foreground">{c.whatsapp || "—"}</td>
+                          <td className="py-2 text-muted-foreground text-[11px]">{c.notas || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+
+              {importColleaguesError && (
+                <p className="text-[13px] font-medium" style={{ color: "oklch(0.60 0.22 27)" }}>{importColleaguesError}</p>
+              )}
+            </div>
+
+            {importColleaguesPreview && !importColleaguesSaving && (
+              <div className="px-5 py-4 border-t border-border flex gap-2 flex-shrink-0">
+                <button onClick={handleConfirmImportColleagues}
+                  className="h-9 px-5 rounded-xl text-[13px] font-semibold text-white transition-all"
+                  style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.44 0.14 185))", boxShadow: "0 4px 14px oklch(0.52 0.13 165 / 30%)" }}>
+                  Importar {importColleaguesPreview.length} compañeros
+                </button>
+                <button onClick={() => { setImportColleaguesPreview(null); setImportColleaguesError("") }}
+                  className="h-9 px-4 rounded-xl text-[13px] font-medium border border-border text-muted-foreground hover:text-foreground transition-colors">
+                  Cancelar
+                </button>
+              </div>
+            )}
+            {importColleaguesSaving && (
+              <div className="px-5 py-4 border-t border-border flex-shrink-0">
+                <p className="text-[13px] text-muted-foreground">Guardando…</p>
+              </div>
+            )}
           </div>
-        )}
+        </div>
+      )}
 
-      </main>
-
-      {/* ── Import contacts modal ── */}
+      {/* ══ IMPORT MODAL ════════════════════════════════════════════════════ */}
       {(importPreview || importLoading || importError || importSuccessCount != null) && importingEquipoId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
           style={{ background: "oklch(0 0 0 / 50%)", backdropFilter: "blur(4px)" }}>
           <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
@@ -827,20 +1440,15 @@ export default function Dashboard() {
                 <X size={16} />
               </button>
             </div>
-
             <div className="px-5 py-4 space-y-3">
-              {/* Éxito */}
               {importSuccessCount != null && (
                 <div className="flex flex-col items-center justify-center py-8 gap-3">
                   <div className="w-14 h-14 rounded-full flex items-center justify-center text-2xl"
-                    style={{ background: "oklch(0.55 0.18 145 / 0.15)" }}>
-                    ✓
-                  </div>
+                    style={{ background: "oklch(0.55 0.18 145 / 0.15)" }}>✓</div>
                   <p className="font-semibold text-foreground text-[15px]">¡Importación exitosa!</p>
                   <p className="text-[13px] text-muted-foreground">
-                    Se guardaron <span className="font-bold text-foreground">{importSuccessCount}</span> participantes en el grupo.
+                    Se guardaron <span className="font-bold text-foreground">{importSuccessCount}</span> participantes.
                   </p>
-                  <p className="text-[11px] text-muted-foreground">Puedes verlos entrando al grupo → Participantes</p>
                 </div>
               )}
               {importLoading && (
@@ -852,7 +1460,7 @@ export default function Dashboard() {
               {importPreview && (
                 <>
                   <p className="text-[13px] text-muted-foreground">
-                    Se encontraron <span className="font-semibold text-foreground">{importPreview.length}</span> participantes. Vista previa (primeros 5):
+                    <span className="font-semibold text-foreground">{importPreview.length}</span> participantes encontrados:
                   </p>
                   <div className="overflow-x-auto rounded-xl border border-border max-h-64 overflow-y-auto">
                     <table className="w-full text-[12px]">
@@ -871,10 +1479,8 @@ export default function Dashboard() {
                             <td className="px-3 py-2 text-muted-foreground">{c.telefono || "—"}</td>
                             <td className="px-3 py-2 text-muted-foreground truncate max-w-[160px]">{c.correo || "—"}</td>
                             <td className="px-2 py-2">
-                              <button
-                                onClick={() => setImportPreview(prev => prev.filter((_, j) => j !== i))}
-                                className="text-muted-foreground hover:text-destructive transition-colors"
-                                title="Quitar">
+                              <button onClick={() => setImportPreview(prev => prev.filter((_, j) => j !== i))}
+                                className="text-muted-foreground hover:text-destructive transition-colors">
                                 <X size={13} />
                               </button>
                             </td>
@@ -886,13 +1492,12 @@ export default function Dashboard() {
                 </>
               )}
             </div>
-
             {importPreview && (
               <div className="px-5 py-4 border-t border-border flex gap-2 justify-between items-center">
                 <span className="text-[12px] text-muted-foreground">
                   {importPreview.length === 0
-                    ? "Lista vacía — agrega un archivo o cancela"
-                    : `${importPreview.length} contacto${importPreview.length !== 1 ? "s" : ""} listos para importar`}
+                    ? "Lista vacía"
+                    : `${importPreview.length} contacto${importPreview.length !== 1 ? "s" : ""} listos`}
                 </span>
                 <div className="flex gap-2">
                   <Button size="sm" variant="outline"
@@ -909,21 +1514,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Hidden file input for contacts import */}
-      <input
-        ref={contactsInputRef}
-        type="file"
-        accept=".csv,.xls,.xlsx"
-        className="hidden"
-        onChange={handleContactsFileSelected}
-      />
-
-      <Footer />
-      <Tutorial
-        userEmail={user?.email}
-        forceOpen={showTutorial}
-        onClose={() => setShowTutorial(false)}
-      />
+      <input ref={contactsInputRef} type="file" accept=".csv,.xls,.xlsx" className="hidden" onChange={handleContactsFileSelected} />
+      <Tutorial userEmail={user?.email} forceOpen={showTutorial} onClose={() => setShowTutorial(false)} />
     </div>
   )
 }

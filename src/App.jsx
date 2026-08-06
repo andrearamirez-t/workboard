@@ -7,6 +7,8 @@ import ColleagueDetail from "@/pages/ColleagueDetail"
 import ProjectForm from "@/pages/ProjectForm"
 import Bitacora from "@/pages/Bitacora"
 import GroupDetail from "@/pages/GroupDetail"
+import SemilleroSelector from "@/pages/SemilleroSelector"
+import GlobalDashboard from "@/pages/GlobalDashboard"
 import NotFound from "@/pages/NotFound"
 
 function ProtectedRoute({ children }) {
@@ -19,13 +21,23 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Login />} />
-      <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-      <Route path="/colleague/new" element={<ProtectedRoute><ColleagueForm /></ProtectedRoute>} />
-      <Route path="/colleague/:id" element={<ProtectedRoute><ColleagueDetail /></ProtectedRoute>} />
-      <Route path="/colleague/:id/edit" element={<ProtectedRoute><ColleagueForm /></ProtectedRoute>} />
-      <Route path="/colleague/:id/project/new" element={<ProtectedRoute><ProjectForm /></ProtectedRoute>} />
+
+      {/* Hub: semillero selector */}
+      <Route path="/semilleros" element={<ProtectedRoute><SemilleroSelector /></ProtectedRoute>} />
+      <Route path="/overview" element={<ProtectedRoute><GlobalDashboard /></ProtectedRoute>} />
+
+      {/* Semillero-scoped workspace */}
+      <Route path="/semillero/:semilleroId/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/semillero/:semilleroId/colleague/new" element={<ProtectedRoute><ColleagueForm /></ProtectedRoute>} />
+      <Route path="/semillero/:semilleroId/colleague/:id" element={<ProtectedRoute><ColleagueDetail /></ProtectedRoute>} />
+      <Route path="/semillero/:semilleroId/colleague/:id/edit" element={<ProtectedRoute><ColleagueForm /></ProtectedRoute>} />
+      <Route path="/semillero/:semilleroId/colleague/:id/project/new" element={<ProtectedRoute><ProjectForm /></ProtectedRoute>} />
+      <Route path="/semillero/:semilleroId/grupo/:id" element={<ProtectedRoute><GroupDetail /></ProtectedRoute>} />
+
+      {/* Legacy redirects */}
+      <Route path="/dashboard" element={<Navigate to="/semilleros" replace />} />
+
       <Route path="/bitacora" element={<ProtectedRoute><Bitacora /></ProtectedRoute>} />
-      <Route path="/grupo/:id" element={<ProtectedRoute><GroupDetail /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   )

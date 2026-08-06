@@ -6,7 +6,6 @@ import { db } from "@/services/firebase"
 import { updateProject } from "@/services/colleagues.service"
 import { uploadDocument, getDocuments, deleteDocument, MAX_FILE_SIZE } from "@/services/storage.service"
 import { useAuth } from "@/context/AuthContext"
-import { Button } from "@/components/ui/button"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
 import { extractPdfText, parseCunPdf } from "@/utils/parsePropuesta"
@@ -41,10 +40,10 @@ const PROJECT_STATES = ["Formulación", "En ejecución", "En evaluación", "Fina
 const VERSION_STATES = ["Pendiente", "En curso", "Entregado", "Cancelado"]
 
 export default function ProjectForm() {
-  const { id } = useParams()
+  const { id, semilleroId } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const { user, isAdmin } = useAuth()
+  const { user } = useAuth()
   const editData = location.state?.editProject
   const isEdit = Boolean(editData)
 
@@ -187,7 +186,7 @@ export default function ProjectForm() {
       } else {
         await updateDoc(doc(db, "companeros", id), { proyectos: arrayUnion(proyecto) })
       }
-      navigate(`/colleague/${id}`)
+      navigate(`/semillero/${semilleroId}/colleague/${id}`)
     } catch (err) {
       console.error("[Workboard] Error guardando proyecto:", err.code, err.message)
       setSaveError("No se pudo guardar. Verifica los permisos o intenta de nuevo.")
@@ -205,23 +204,39 @@ export default function ProjectForm() {
       {/* Header */}
       <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
         style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
-        <button onClick={() => navigate(`/colleague/${id}`)}
+        <button onClick={() => navigate(`/semillero/${semilleroId}/colleague/${id}`)}
           className="text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors">
           ← Volver
         </button>
         <ThemeToggle />
       </header>
 
-      <div className="max-w-2xl mx-auto px-6 py-8 w-full">
-
-        <div className="mb-7">
-          <h1 className="text-[26px] font-bold tracking-tight text-foreground">
-            {isEdit ? "Editar proyecto" : "Nuevo proyecto"}
-          </h1>
-          <p className="text-[13px] text-muted-foreground mt-1">
-            {isEdit ? "Actualiza los datos del proyecto." : "Define el alcance y cronograma del proyecto."}
-          </p>
+      {/* ── Hero strip ── */}
+      <div className="relative overflow-hidden px-6 py-8"
+        style={{ background: "linear-gradient(125deg, oklch(0.46 0.13 165) 0%, oklch(0.40 0.14 185) 45%, oklch(0.48 0.14 245) 100%)" }}>
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 right-0 w-56 h-56 opacity-25"
+            style={{ background: "radial-gradient(circle at top right, oklch(0.58 0.16 295), transparent 65%)", filter: "blur(40px)" }} />
         </div>
+        <div className="max-w-2xl mx-auto w-full relative flex items-center gap-5">
+          <div className="w-14 h-14 rounded-2xl flex-shrink-0 flex items-center justify-center"
+            style={{ background: "linear-gradient(135deg, oklch(0.62 0.18 165), oklch(0.54 0.22 205))", boxShadow: "0 8px 24px oklch(0.52 0.13 165 / 40%)" }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-[22px] font-bold text-white leading-tight tracking-tight">
+              {isEdit ? "Editar proyecto" : "Nuevo proyecto"}
+            </h1>
+            <p className="text-[13px] text-white/70 mt-0.5">
+              {isEdit ? form.nombre || "Actualiza los datos del proyecto" : "Define el alcance y cronograma"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-2xl mx-auto px-6 py-8 w-full">
 
         {/* ── Importar desde PDF ── */}
         <div className="rounded-2xl border border-border bg-card p-5 mb-6">
@@ -258,7 +273,8 @@ export default function ProjectForm() {
         <form onSubmit={handleSubmit} className="space-y-4">
 
           {/* ── Sección: Identidad ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-4"
+            style={{ borderLeftColor: "oklch(0.52 0.13 165)", borderLeftWidth: "3px" }}>
             <span className={sectionLabel}>Identidad del proyecto</span>
 
             <div className="flex gap-3 items-end">
@@ -294,7 +310,8 @@ export default function ProjectForm() {
           </div>
 
           {/* ── Sección: Herramientas ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-4"
+            style={{ borderLeftColor: "oklch(0.62 0.12 230)", borderLeftWidth: "3px" }}>
             <span className={sectionLabel}>Stack y observaciones</span>
             <div>
               <label className="block text-[13px] font-medium text-foreground mb-1.5">Herramientas usadas</label>
@@ -309,7 +326,8 @@ export default function ProjectForm() {
           </div>
 
           {/* ── Sección: Cronograma ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-5"
+            style={{ borderLeftColor: "oklch(0.58 0.16 295)", borderLeftWidth: "3px" }}>
             <span className={sectionLabel}>Cronograma</span>
 
             <div className="grid grid-cols-2 gap-3">
@@ -400,10 +418,8 @@ export default function ProjectForm() {
                         {d.size && <span className="text-[11px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
                         <button type="button" onClick={() => downloadFile(d.url, d.nombre)}
                           className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 text-[13px]" title="Descargar">↓</button>
-                        {(isAdmin || true) && (
-                          <button type="button" onClick={() => handleDeleteDoc(d)}
-                            className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0 text-[15px] leading-none">×</button>
-                        )}
+                        <button type="button" onClick={() => handleDeleteDoc(d)}
+                          className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0 text-[15px] leading-none">×</button>
                       </div>
                     )
                   })}
@@ -419,10 +435,15 @@ export default function ProjectForm() {
             </div>
           )}
           <div className="flex gap-3 pt-1">
-            <Button type="submit" disabled={saving}>
+            <button type="submit" disabled={saving}
+              className="h-10 px-6 rounded-xl text-[13px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
+              style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.44 0.14 185))", boxShadow: "0 4px 14px oklch(0.52 0.13 165 / 30%)" }}>
               {saving ? "Guardando…" : isEdit ? "Actualizar proyecto" : "Guardar proyecto"}
-            </Button>
-            <Button type="button" variant="outline" onClick={() => navigate(`/colleague/${id}`)}>Cancelar</Button>
+            </button>
+            <button type="button" onClick={() => navigate(`/semillero/${semilleroId}/colleague/${id}`)}
+              className="h-10 px-5 rounded-xl text-[13px] font-medium border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 transition-all">
+              Cancelar
+            </button>
           </div>
 
         </form>

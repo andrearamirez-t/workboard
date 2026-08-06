@@ -47,7 +47,7 @@ const dicebearUrl = (style, seed) =>
 export default function ColleagueForm() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const { id } = useParams()
+  const { id, semilleroId } = useParams()
   const isEdit = Boolean(id)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
@@ -58,6 +58,7 @@ export default function ColleagueForm() {
     colorHue: null, avatarUrl: null,
   })
   const [dicebearStyle, setDicebearStyle] = useState("adventurer-neutral")
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false)
   const notasRef = useRef(null)
 
   useEffect(() => {
@@ -123,10 +124,10 @@ export default function ColleagueForm() {
     try {
       if (isEdit) {
         await updateDoc(doc(db, "companeros", id), { ...data, updatedAt: serverTimestamp() })
-        navigate(`/colleague/${id}`)
+        navigate(`/semillero/${semilleroId}/colleague/${id}`)
       } else {
-        await addDoc(collection(db, "companeros"), { ...data, proyectos: [], creadoPor: user.uid, createdAt: serverTimestamp() })
-        navigate("/dashboard")
+        await addDoc(collection(db, "companeros"), { ...data, semilleroId, proyectos: [], creadoPor: user.uid, createdAt: serverTimestamp() })
+        navigate(`/semillero/${semilleroId}/dashboard`)
       }
     } catch (err) {
       console.error("[Workboard] Error guardando perfil:", err.code, err.message)
@@ -135,7 +136,7 @@ export default function ColleagueForm() {
     }
   }
 
-  const back = () => isEdit ? navigate(`/colleague/${id}`) : navigate("/dashboard")
+  const back = () => isEdit ? navigate(`/semillero/${semilleroId}/colleague/${id}`) : navigate(`/semillero/${semilleroId}/dashboard`)
 
   const inputClass = "w-full bg-muted/50 border border-border rounded-xl px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-primary/30 transition-all"
   const sectionLabel = "text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-4 block"
@@ -155,21 +156,42 @@ export default function ColleagueForm() {
         <ThemeToggle />
       </header>
 
-      <div className="max-w-2xl mx-auto px-6 py-8 w-full">
-
-        <div className="mb-7">
-          <h1 className="text-[26px] font-bold tracking-tight text-foreground">
-            {isEdit ? "Editar perfil" : "Nuevo compañero"}
-          </h1>
-          <p className="text-[13px] text-muted-foreground mt-1">
-            {isEdit ? "Actualiza los datos de tu perfil." : "Completa la información para agregar al equipo."}
-          </p>
+      {/* ── Hero strip ── */}
+      <div className="relative overflow-hidden px-6 py-8"
+        style={{ background: "linear-gradient(125deg, oklch(0.46 0.13 165) 0%, oklch(0.40 0.14 185) 45%, oklch(0.48 0.14 245) 100%)" }}>
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 right-0 w-56 h-56 opacity-25"
+            style={{ background: "radial-gradient(circle at top right, oklch(0.62 0.14 165), transparent 65%)", filter: "blur(40px)" }} />
         </div>
+        <div className="max-w-2xl mx-auto w-full relative flex items-center gap-5">
+          <div className="w-14 h-14 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-2xl overflow-hidden"
+            style={{
+              background: form.avatarUrl ? "var(--card)" : `linear-gradient(135deg, oklch(0.68 0.18 ${previewHue}), oklch(0.54 0.22 ${(previewHue + 40) % 360}))`,
+              boxShadow: "0 8px 24px oklch(0.52 0.13 165 / 40%)",
+            }}>
+            {form.avatarUrl
+              ? <img src={form.avatarUrl} alt="avatar" className="w-full h-full object-cover" />
+              : <span>{form.nombre?.charAt(0)?.toUpperCase() || "?"}</span>
+            }
+          </div>
+          <div>
+            <h1 className="text-[22px] font-bold text-white leading-tight tracking-tight">
+              {isEdit ? "Editar perfil" : "Nuevo colaborador"}
+            </h1>
+            <p className="text-[13px] text-white/70 mt-0.5">
+              {isEdit ? form.nombre || "Actualiza los datos del perfil" : "Completa la información para agregar al equipo"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-2xl mx-auto px-6 py-8 w-full">
 
         <form onSubmit={handleSubmit} className="space-y-4">
 
           {/* ── Sección: Apariencia ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-5"
+            style={{ borderLeftColor: "oklch(0.52 0.13 165)", borderLeftWidth: "3px" }}>
             <span className={sectionLabel}>Apariencia del perfil</span>
 
             {/* Preview */}
@@ -227,59 +249,82 @@ export default function ColleagueForm() {
               </p>
             </div>
 
-            {/* Avatar — solo caricaturas DiceBear */}
+            {/* Avatar */}
             <div>
               <p className="text-[13px] font-medium text-foreground mb-3">Avatar</p>
 
-              {/* Selector de estilo */}
-              <div className="flex flex-wrap gap-2 mb-4">
-                {DICEBEAR_STYLES.map(s => (
-                  <button key={s.key} type="button"
-                    onClick={() => setDicebearStyle(s.key)}
-                    className="px-3 py-1 text-[12px] font-semibold rounded-lg border transition-all"
-                    style={{
-                      borderColor: dicebearStyle === s.key ? `oklch(0.62 0.20 ${previewHue})` : "var(--border)",
-                      background: dicebearStyle === s.key ? `oklch(0.62 0.20 ${previewHue} / 0.12)` : "transparent",
-                      color: dicebearStyle === s.key ? "var(--foreground)" : "var(--muted-foreground)",
-                    }}>
-                    {s.label}
+              {/* Preview + toggle */}
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-full overflow-hidden flex-shrink-0 border-2 border-border flex items-center justify-center text-lg font-bold"
+                  style={form.avatarUrl
+                    ? { background: "var(--muted)" }
+                    : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${previewHue}), oklch(0.54 0.22 ${(previewHue + 40) % 360}))`, color: "#fff" }}>
+                  {form.avatarUrl
+                    ? <img src={form.avatarUrl} alt="avatar" className="w-full h-full object-cover" />
+                    : (form.nombre?.charAt(0)?.toUpperCase() || "?")}
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button type="button"
+                    onClick={() => setAvatarPickerOpen(v => !v)}
+                    className="px-3 py-1.5 text-[12px] font-medium rounded-lg border border-border hover:bg-muted transition-colors">
+                    {avatarPickerOpen ? "Cerrar" : form.avatarUrl ? "Cambiar avatar" : "Elegir avatar"}
                   </button>
-                ))}
-              </div>
-
-              {/* Grilla de avatares */}
-              <div className="grid grid-cols-6 gap-2">
-                {DICEBEAR_SEEDS.map(seed => {
-                  const url = dicebearUrl(dicebearStyle, seed)
-                  const isSelected = form.avatarUrl === url
-                  return (
-                    <button key={seed} type="button"
-                      onClick={() => setForm(f => ({ ...f, avatarUrl: url }))}
-                      className="w-full aspect-square rounded-xl overflow-hidden transition-all hover:scale-105"
-                      style={{
-                        boxShadow: isSelected
-                          ? `0 0 0 3px oklch(0.62 0.20 ${previewHue})`
-                          : "0 1px 4px oklch(0 0 0 / 12%)",
-                      }}
-                      title={seed}>
-                      <img src={url} alt={seed} className="w-full h-full object-cover" loading="lazy" />
+                  {form.avatarUrl && (
+                    <button type="button"
+                      onClick={() => { setForm(f => ({ ...f, avatarUrl: null })); setAvatarPickerOpen(false) }}
+                      className="text-[12px] text-destructive hover:opacity-70 transition-opacity">
+                      Quitar
                     </button>
-                  )
-                })}
+                  )}
+                </div>
               </div>
 
-              {form.avatarUrl && (
-                <button type="button"
-                  onClick={() => setForm(f => ({ ...f, avatarUrl: null }))}
-                  className="mt-3 text-[12px] text-destructive hover:opacity-70 transition-opacity">
-                  Quitar avatar
-                </button>
+              {/* Picker expandible */}
+              {avatarPickerOpen && (
+                <div className="mt-4 p-4 border border-border rounded-xl bg-muted/30 space-y-3">
+                  {/* Estilo */}
+                  <div className="flex gap-2">
+                    {DICEBEAR_STYLES.map(s => (
+                      <button key={s.key} type="button"
+                        onClick={() => setDicebearStyle(s.key)}
+                        className="px-3 py-1 text-[12px] font-semibold rounded-lg border transition-all"
+                        style={{
+                          borderColor: dicebearStyle === s.key ? `oklch(0.62 0.20 ${previewHue})` : "var(--border)",
+                          background: dicebearStyle === s.key ? `oklch(0.62 0.20 ${previewHue} / 0.12)` : "transparent",
+                          color: dicebearStyle === s.key ? "var(--foreground)" : "var(--muted-foreground)",
+                        }}>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Grid con scroll */}
+                  <div className="grid grid-cols-8 gap-1.5 max-h-44 overflow-y-auto pr-1">
+                    {DICEBEAR_SEEDS.map(seed => {
+                      const url = dicebearUrl(dicebearStyle, seed)
+                      const isSelected = form.avatarUrl === url
+                      return (
+                        <button key={seed} type="button"
+                          onClick={() => { setForm(f => ({ ...f, avatarUrl: url })); setAvatarPickerOpen(false) }}
+                          className="w-full aspect-square rounded-lg overflow-hidden transition-all hover:scale-110"
+                          style={{
+                            boxShadow: isSelected
+                              ? `0 0 0 2.5px oklch(0.62 0.20 ${previewHue})`
+                              : "0 1px 3px oklch(0 0 0 / 10%)",
+                          }}
+                          title={seed}>
+                          <img src={url} alt={seed} className="w-full h-full object-cover" loading="lazy" />
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
               )}
             </div>
           </div>
 
           {/* ── Sección: Info básica ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-4"
+            style={{ borderLeftColor: "oklch(0.58 0.16 295)", borderLeftWidth: "3px" }}>
             <span className={sectionLabel}>Información básica</span>
             <div>
               <label className="block text-[13px] font-medium text-foreground mb-1.5">Nombre *</label>
@@ -317,7 +362,8 @@ export default function ColleagueForm() {
           </div>
 
           {/* ── Sección: Stack y trabajo ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-4"
+            style={{ borderLeftColor: "oklch(0.62 0.12 230)", borderLeftWidth: "3px" }}>
             <span className={sectionLabel}>Stack y contexto</span>
             <div>
               <label className="block text-[13px] font-medium text-foreground mb-1.5">Herramientas / Stack</label>
@@ -332,7 +378,8 @@ export default function ColleagueForm() {
           </div>
 
           {/* ── Sección: Notas ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4">
+          <div className="bg-card border border-border rounded-2xl p-6 space-y-4"
+            style={{ borderLeftColor: "oklch(0.75 0.15 80)", borderLeftWidth: "3px" }}>
             <div className="flex items-center justify-between">
               <span className={sectionLabel + " mb-0"}>Notas</span>
               <button type="button" onClick={() => setShowEmoji(v => !v)}
@@ -358,10 +405,15 @@ export default function ColleagueForm() {
             </div>
           )}
           <div className="flex gap-3 pt-1">
-            <Button type="submit" disabled={saving}>
-              {saving ? "Guardando…" : isEdit ? "Actualizar perfil" : "Guardar compañero"}
-            </Button>
-            <Button type="button" variant="outline" onClick={back}>Cancelar</Button>
+            <button type="submit" disabled={saving}
+              className="h-10 px-6 rounded-xl text-[13px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
+              style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.44 0.14 185))", boxShadow: "0 4px 14px oklch(0.52 0.13 165 / 30%)" }}>
+              {saving ? "Guardando…" : isEdit ? "Actualizar perfil" : "Guardar colaborador"}
+            </button>
+            <button type="button" onClick={back}
+              className="h-10 px-5 rounded-xl text-[13px] font-medium border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 transition-all">
+              Cancelar
+            </button>
           </div>
 
         </form>

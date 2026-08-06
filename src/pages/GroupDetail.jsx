@@ -61,7 +61,7 @@ function avanceColor(v) {
 const EMPTY_PROJECT = { nombre: "", estado: "En desarrollo", avance: 0, area: "", queHace: "", herramientas: "", fechaInicio: "", fechaEntrega: "", observaciones: "" }
 
 export default function GroupDetail() {
-  const { id } = useParams()
+  const { id, semilleroId } = useParams()
   const navigate = useNavigate()
   const { user, myColleagueId } = useAuth()
   const isAdmin = ADMIN_EMAILS.includes(user?.email)
@@ -306,7 +306,7 @@ export default function GroupDetail() {
           tipo: "proyecto_grupo",
           titulo: `Nuevo proyecto en "${grupo?.nombre}"`,
           subtitulo: data.nombre,
-          path: `/grupo/${id}`,
+          path: `/semillero/${semilleroId}/grupo/${id}`,
         })
       }
       const g = await getGrupo(id)
@@ -377,7 +377,7 @@ export default function GroupDetail() {
     const memberColleagues = colleagues.filter(c => (grupo?.miembros || []).includes(c.id))
     memberColleagues.forEach(c => {
       if (!c.uid || ADMIN_EMAILS.includes(c.email)) return
-      crearNotificacionUsuario({ toUid: c.uid, tipo, titulo, subtitulo, path: p }).catch(() => {})
+      crearNotificacionUsuario({ toUid: c.uid, tipo, titulo, subtitulo, path: p, semilleroId }).catch(() => {})
     })
   }
 
@@ -388,14 +388,14 @@ export default function GroupDetail() {
     try {
       await addGrupoTask(id, taskForm)
       if (Number(taskForm.avance) >= 100) {
-        notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), grupoNombre: grupo?.nombre, path: `/grupo/${id}` }).catch(() => {})
+        notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), grupoNombre: grupo?.nombre, path: `/semillero/${semilleroId}/grupo/${id}`, semilleroId }).catch(() => {})
       }
       // Notificar a los miembros del grupo
       notificarMiembros({
         tipo: "tarea_grupo",
         titulo: `Nueva tarea en "${grupo?.nombre}"`,
         subtitulo: taskForm.titulo.trim(),
-        path: `/grupo/${id}`,
+        path: `/semillero/${semilleroId}/grupo/${id}`,
       })
       setTasks(await getGrupoTasks(id))
       setTaskForm({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
@@ -411,13 +411,14 @@ export default function GroupDetail() {
       notificarTareaCompletada({
         taskTitle: task?.titulo,
         grupoNombre: grupo?.nombre,
-        path: `/grupo/${id}`,
+        path: `/semillero/${semilleroId}/grupo/${id}`,
+        semilleroId,
       }).catch(() => {})
       notificarMiembros({
         tipo: "tarea_completada_grupo",
         titulo: `Tarea completada en "${grupo?.nombre}"`,
         subtitulo: task?.titulo,
-        path: `/grupo/${id}`,
+        path: `/semillero/${semilleroId}/grupo/${id}`,
       })
     }
   }
@@ -447,7 +448,8 @@ export default function GroupDetail() {
         tipo: "plazo_solicitado",
         taskTitle: `Solicitud de plazo en "${grupo?.nombre}"`,
         assigneeName: yo?.nombre || user?.displayName || user?.email,
-        path: `/grupo/${id}`,
+        path: `/semillero/${semilleroId}/grupo/${id}`,
+        semilleroId,
       }).catch(() => {})
     } catch (err) {
       console.error("[Workboard] Error solicitando plazo grupo:", err)
@@ -496,8 +498,8 @@ export default function GroupDetail() {
       await updateGrupoTaskAvance(id, taskId, newAvance, nuevoEstado)
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, avance: newAvance, ...(nuevoEstado ? { estado: nuevoEstado } : {}) } : t))
       if (newAvance >= 100 && task?.estado !== "Hecho") {
-        notificarTareaCompletada({ taskTitle: task?.titulo, grupoNombre: grupo?.nombre, path: `/grupo/${id}` }).catch(() => {})
-        notificarMiembros({ tipo: "tarea_completada_grupo", titulo: `Tarea completada en "${grupo?.nombre}"`, subtitulo: task?.titulo, path: `/grupo/${id}` })
+        notificarTareaCompletada({ taskTitle: task?.titulo, grupoNombre: grupo?.nombre, path: `/semillero/${semilleroId}/grupo/${id}`, semilleroId }).catch(() => {})
+        notificarMiembros({ tipo: "tarea_completada_grupo", titulo: `Tarea completada en "${grupo?.nombre}"`, subtitulo: task?.titulo, path: `/semillero/${semilleroId}/grupo/${id}` })
       }
     } catch (err) {
       console.error("[Workboard] Error actualizando avance de tarea:", err)
@@ -554,7 +556,7 @@ export default function GroupDetail() {
     await updateGrupoTask(id, task.id, data)
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...data } : t))
     if (prevAvance < 100 && newAvance >= 100) {
-      notificarTareaCompletada({ taskTitle: data.titulo, grupoNombre: grupo?.nombre, path: `/grupo/${id}` }).catch(() => {})
+      notificarTareaCompletada({ taskTitle: data.titulo, grupoNombre: grupo?.nombre, path: `/semillero/${semilleroId}/grupo/${id}`, semilleroId }).catch(() => {})
     }
     setEditingTaskId(null)
   }
@@ -570,7 +572,7 @@ export default function GroupDetail() {
         tipo: "feedback_grupo",
         titulo: `Nuevo feedback en "${grupo?.nombre}"`,
         subtitulo: feedbackText.trim().slice(0, 80),
-        path: `/grupo/${id}`,
+        path: `/semillero/${semilleroId}/grupo/${id}`,
       })
       setFeedbackText("")
       setFeedback(await getGrupoFeedback(id))
@@ -602,7 +604,7 @@ export default function GroupDetail() {
       <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-3">
         <p className="text-[15px] font-semibold text-foreground">Sin acceso</p>
         <p className="text-[13px] text-muted-foreground">Solo los miembros del grupo pueden ver este contenido.</p>
-        <button onClick={() => navigate("/dashboard")} className="text-[13px] text-primary hover:underline mt-2">← Volver al dashboard</button>
+        <button onClick={() => navigate(`/semillero/${semilleroId}/dashboard`)} className="text-[13px] text-primary hover:underline mt-2">← Volver al dashboard</button>
       </div>
     )
   }
@@ -623,41 +625,47 @@ export default function GroupDetail() {
     <div className="min-h-screen bg-background flex flex-col">
       {/* ── Header ── */}
       <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
-        style={{ backgroundColor: "color-mix(in srgb, var(--background) 82%, transparent)", backdropFilter: "blur(20px)" }}>
-        <button onClick={() => navigate("/dashboard?tab=equipos")}
-          className="flex items-center gap-2 text-[13px] text-muted-foreground hover:text-foreground transition-colors">
+        style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
+        <button onClick={() => navigate(`/semillero/${semilleroId}/dashboard?tab=equipos`)}
+          className="flex items-center gap-2 text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors">
           ← Volver
         </button>
         <ThemeToggle />
       </header>
 
-      <main className="px-6 py-8 max-w-4xl mx-auto w-full flex-1 space-y-6">
-
-        {/* ── Cabecera del grupo ── */}
-        <div className="rounded-2xl border border-border p-6 relative overflow-hidden"
-          style={{
-            background: `linear-gradient(135deg, var(--card), oklch(0.60 0.14 ${hue} / 0.07))`,
-            borderLeft: `4px solid oklch(0.62 0.22 ${hue})`,
-          }}>
-          <div className="absolute top-0 right-0 w-40 h-40 pointer-events-none opacity-15"
-            style={{ background: `radial-gradient(circle at top right, oklch(0.65 0.22 ${hue}), transparent 70%)`, filter: "blur(30px)" }} />
-          <div className="flex items-start gap-4 relative">
-            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white text-xl font-bold flex-shrink-0"
-              style={{ background: `linear-gradient(135deg, oklch(0.62 0.22 ${hue}), oklch(0.50 0.24 ${(Number(hue)+40)%360}))` }}>
+      {/* ── Hero banner ── */}
+      <div className="relative overflow-hidden px-6 py-10"
+        style={{ background: "linear-gradient(125deg, oklch(0.46 0.13 165) 0%, oklch(0.40 0.14 185) 45%, oklch(0.48 0.14 245) 100%)" }}>
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 right-0 w-72 h-72 opacity-30"
+            style={{ background: "radial-gradient(circle at top right, oklch(0.62 0.14 165), transparent 65%)", filter: "blur(40px)" }} />
+          <div className="absolute bottom-0 left-0 w-48 h-48 opacity-20"
+            style={{ background: "radial-gradient(circle, oklch(0.58 0.16 295), transparent 65%)", filter: "blur(30px)" }} />
+        </div>
+        <div className="max-w-4xl mx-auto w-full relative">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-5">
+            <div className="w-16 h-16 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-2xl"
+              style={{
+                background: "linear-gradient(135deg, oklch(0.62 0.18 165), oklch(0.54 0.22 205))",
+                boxShadow: "0 12px 32px oklch(0.52 0.13 165 / 45%), 0 0 0 2px oklch(0.68 0.12 165 / 30%)",
+              }}>
               {grupo.nombre?.charAt(0).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
-              <h1 className="text-[24px] font-bold text-foreground leading-tight">{grupo.nombre}</h1>
-              {grupo.descripcion && <p className="text-[13px] text-muted-foreground mt-0.5">{grupo.descripcion}</p>}
+              <h1 className="text-[26px] font-bold text-white leading-tight tracking-tight">{grupo.nombre}</h1>
+              {grupo.descripcion && <p className="text-[13px] text-white/75 mt-0.5">{grupo.descripcion}</p>}
               {miembros.length > 0 && (
-                <div className="flex items-center gap-2 mt-3">
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
                   <div className="flex -space-x-2">
                     {miembros.slice(0, 6).map(c => {
                       const ch = c.colorHue ?? hashHue(c.id)
                       return (
-                        <a key={c.id} href={`/colleague/${c.id}`}
-                          className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0 hover:z-10 hover:scale-110 transition-transform overflow-hidden"
-                          style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))` }}
+                        <a key={c.id} href={`/semillero/${semilleroId}/colleague/${c.id}`}
+                          className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 flex-shrink-0 hover:z-10 hover:scale-110 transition-transform overflow-hidden"
+                          style={{
+                            background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))`,
+                            ringColor: "oklch(0.46 0.13 165)",
+                          }}
                           title={c.nombre}>
                           {c.avatarUrl
                             ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
@@ -669,15 +677,15 @@ export default function GroupDetail() {
                       )
                     })}
                     {miembros.length > 6 && (
-                      <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold text-muted-foreground ring-2 ring-card">
+                      <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-[10px] font-semibold text-white ring-2 ring-white/20">
                         +{miembros.length - 6}
                       </div>
                     )}
                   </div>
-                  <span className="text-[12px] text-muted-foreground">{miembros.length} miembro{miembros.length !== 1 ? "s" : ""} en la plataforma</span>
+                  <span className="text-[12px] text-white/70">{miembros.length} miembro{miembros.length !== 1 ? "s" : ""}</span>
                   {contacts.length > 0 && (
                     <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full"
-                      style={{ background: `oklch(0.62 0.18 ${hue} / 0.12)`, color: `oklch(0.50 0.20 ${hue})` }}>
+                      style={{ background: "oklch(0.30 0.06 165)", color: "oklch(0.88 0.08 165)" }}>
                       {contacts.length} participante{contacts.length !== 1 ? "s" : ""}
                     </span>
                   )}
@@ -686,6 +694,9 @@ export default function GroupDetail() {
             </div>
           </div>
         </div>
+      </div>
+
+      <main className="px-6 py-8 max-w-4xl mx-auto w-full flex-1 space-y-6">
 
         {/* ══ PROYECTOS ══════════════════════════════════════════════════════ */}
         <section className="bg-card border border-border rounded-2xl p-5">
@@ -836,9 +847,15 @@ export default function GroupDetail() {
 
               {/* Lista proyectos */}
               {proyectos.length === 0 ? (
-                <p className="text-[13px] text-muted-foreground italic py-4">
-                  {grupo.proyectos?.length > 0 ? "Sin coincidencias." : "Sin proyectos aún."}
-                </p>
+                <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                    style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.13 165)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+                    </svg>
+                  </div>
+                  <p className="text-[13px] font-medium text-muted-foreground">{grupo.proyectos?.length > 0 ? "Sin coincidencias." : "Sin proyectos aún."}</p>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {proyectos.map((p, i) => {
@@ -1026,7 +1043,15 @@ export default function GroupDetail() {
 
               {/* Lista */}
               {logs.length === 0 ? (
-                <p className="text-[13px] text-muted-foreground italic">Sin notas aún.</p>
+                <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                    style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.13 165)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>
+                    </svg>
+                  </div>
+                  <p className="text-[13px] font-medium text-muted-foreground">Sin notas aún.</p>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {logs.map(l => {
@@ -1142,7 +1167,15 @@ export default function GroupDetail() {
               )}
 
               {tasks.length === 0 ? (
-                <p className="text-[13px] text-muted-foreground italic">Sin tareas aún.</p>
+                <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                    style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.13 165)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="9,11 12,14 22,4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                    </svg>
+                  </div>
+                  <p className="text-[13px] font-medium text-muted-foreground">Sin tareas aún.</p>
+                </div>
               ) : (
                 <div className="space-y-2">
                   {[...tareasPendientes, ...tareasHechas].map(t => {
@@ -1471,7 +1504,15 @@ export default function GroupDetail() {
               )}
 
               {feedback.length === 0 ? (
-                <p className="text-[13px] text-muted-foreground italic">Sin retroalimentación aún.</p>
+                <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                    style={{ background: "oklch(0.75 0.15 80 / 0.12)" }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="oklch(0.65 0.16 75)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                  </div>
+                  <p className="text-[13px] font-medium text-muted-foreground">Sin retroalimentación aún.</p>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {feedback.map(f => (

@@ -23,7 +23,7 @@ const saveReadIds = (key, set) => {
   localStorage.setItem(key, JSON.stringify([...set]))
 }
 
-export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid }) {
+export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid, semilleroId }) {
   const [items, setItems] = useState([])
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
@@ -41,12 +41,13 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
     const unsubs = []
 
     if (isAdmin) {
-      // Notas del equipo
+      // Notas del equipo — filtradas por semilleroId
       const qLogs = query(collection(db, "logs"), orderBy("createdAt", "desc"))
       unsubs.push(onSnapshot(qLogs, (snap) => {
         const readIds = getReadIds(key)
         const fresh = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
+          .filter(doc => !semilleroId || doc.semilleroId === semilleroId)
           .filter(doc => !readIds.has(doc.id))
           .map(doc => ({
             id: doc.id,
@@ -54,18 +55,19 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
             text: `${doc.colleagueName || "Alguien"} agregó una nota`,
             sub: doc.nota?.slice(0, 70) + (doc.nota?.length > 70 ? "…" : ""),
             date: doc.createdAt?.toDate?.(),
-            href: `/colleague/${doc.colleagueId}`,
+            href: `/semillero/${semilleroId}/colleague/${doc.colleagueId}`,
             dot: "oklch(0.60 0.22 27)",
           }))
         setItems(prev => [...prev.filter(i => i.source !== "log"), ...fresh])
       }, () => {}))
 
-      // Tareas completadas al 100%
+      // Tareas completadas al 100% — filtradas por semilleroId
       const qNotif = query(collection(db, "notificaciones"), orderBy("createdAt", "desc"))
       unsubs.push(onSnapshot(qNotif, (snap) => {
         const readIds = getReadIds(keyNotif)
         const fresh = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
+          .filter(doc => !semilleroId || doc.semilleroId === semilleroId)
           .filter(doc => !readIds.has(doc.id))
           .map(doc => {
             const quien = doc.assigneeName || doc.grupoNombre || "Un miembro"
@@ -75,20 +77,21 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
               text: `✓ Tarea completada al 100%`,
               sub: `"${doc.taskTitle}" · ${quien}`,
               date: doc.createdAt?.toDate?.(),
-              href: doc.path || "/dashboard",
+              href: doc.path || `/semillero/${semilleroId}/dashboard`,
               dot: "oklch(0.55 0.18 145)",
             }
           })
         setItems(prev => [...prev.filter(i => i.source !== "notif"), ...fresh])
       }, () => {}))
 
-      // Notificaciones personales para admin (ej: invitación a grupo)
+      // Notificaciones personales para admin — filtradas por semilleroId
       if (userUid) {
         const qU = query(collection(db, "notif_usuario", userUid, "items"), orderBy("createdAt", "desc"))
         unsubs.push(onSnapshot(qU, (snap) => {
           const readIds = getReadIds(keyUserNotif)
           const fresh = snap.docs
             .map(d => ({ id: d.id, ...d.data() }))
+            .filter(doc => !semilleroId || doc.semilleroId === semilleroId)
             .filter(doc => !readIds.has(doc.id))
             .map(doc => ({
               id: doc.id,
@@ -96,7 +99,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
               text: doc.titulo || "Nueva notificación",
               sub: doc.subtitulo || null,
               date: doc.createdAt?.toDate?.(),
-              href: doc.path || "/dashboard",
+              href: doc.path || `/semillero/${semilleroId}/dashboard`,
               dot: "oklch(0.55 0.18 260)",
             }))
           setItems(prev => [...prev.filter(i => i.source !== "unotif"), ...fresh])
@@ -119,13 +122,13 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
             text: `${doc.creadoPorNombre || "Admin"} te dejó retroalimentación`,
             sub: doc.texto?.slice(0, 70) + (doc.texto?.length > 70 ? "…" : ""),
             date: doc.createdAt?.toDate?.(),
-            href: `/colleague/${myColleagueId}`,
+            href: `/semillero/${semilleroId}/colleague/${myColleagueId}`,
             dot: "oklch(0.60 0.22 27)",
           }))
         setItems(prev => [...prev.filter(i => i.source !== "fb"), ...fresh])
       }, () => {}))
 
-      // Notificaciones personales (tareas, feedback grupo, etc.)
+      // Notificaciones personales (tareas, feedback grupo, etc.) — filtradas por semilleroId
       if (userUid) {
         const qU = query(
           collection(db, "notif_usuario", userUid, "items"),
@@ -135,6 +138,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
           const readIds = getReadIds(keyUserNotif)
           const fresh = snap.docs
             .map(d => ({ id: d.id, ...d.data() }))
+            .filter(doc => !semilleroId || doc.semilleroId === semilleroId)
             .filter(doc => !readIds.has(doc.id))
             .map(doc => ({
               id: doc.id,
@@ -142,7 +146,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
               text: doc.titulo || "Nueva notificación",
               sub: doc.subtitulo || null,
               date: doc.createdAt?.toDate?.(),
-              href: doc.path || "/dashboard",
+              href: doc.path || `/semillero/${semilleroId}/dashboard`,
               dot: doc.tipo === "feedback_grupo" ? "oklch(0.60 0.22 27)" : "oklch(0.55 0.18 260)",
             }))
           setItems(prev => [...prev.filter(i => i.source !== "unotif"), ...fresh])
@@ -151,7 +155,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid })
     }
 
     return () => unsubs.forEach(u => u())
-  }, [isAdmin, myColleagueId, userUid, key, keyNotif, keyUserNotif])
+  }, [isAdmin, myColleagueId, userUid, semilleroId, key, keyNotif, keyUserNotif])
 
   const sourceKey = (source) => {
     if (source === "notif") return keyNotif

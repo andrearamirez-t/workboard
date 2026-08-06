@@ -1,9 +1,50 @@
-import { collection, getDocs, getDoc, updateDoc, deleteDoc, doc, arrayRemove, arrayUnion, query, where } from "firebase/firestore"
+import { collection, getDocs, getDoc, addDoc, updateDoc, deleteDoc, doc, arrayRemove, arrayUnion, query, where, serverTimestamp } from "firebase/firestore"
 import { db } from "@/services/firebase"
 
 export const getColleagues = async () => {
   const snapshot = await getDocs(collection(db, "companeros"))
   return snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+export const getColleaguesBySemillero = async (semilleroId) => {
+  const q = query(collection(db, "companeros"), where("semilleroId", "==", semilleroId))
+  const snap = await getDocs(q)
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+}
+
+export const bulkCreateColleagues = async (companeros, semilleroId, createdByUid) => {
+  const results = await Promise.allSettled(
+    companeros.map(c =>
+      addDoc(collection(db, "companeros"), {
+        nombre:      c.nombre || "",
+        email:       c.email || "",
+        whatsapp:    c.whatsapp || "",
+        area:        c.area || "",
+        rol:         c.rol || "",
+        herramientas: [],
+        trabajaEn:   "",
+        notas:       c.notas || "",
+        colorHue:    null,
+        avatarUrl:   null,
+        proyectos:   [],
+        semilleroId,
+        creadoPor:   createdByUid,
+        createdAt:   serverTimestamp(),
+      })
+    )
+  )
+  const ok = results.filter(r => r.status === "fulfilled").length
+  const fail = results.filter(r => r.status === "rejected").length
+  return { ok, fail }
+}
+
+export const migrateColleaguesToSemillero = async (semilleroId) => {
+  const snap = await getDocs(collection(db, "companeros"))
+  const updates = snap.docs
+    .filter(d => !d.data().semilleroId)
+    .map(d => updateDoc(doc(db, "companeros", d.id), { semilleroId }))
+  await Promise.all(updates)
+  return updates.length
 }
 
 export const getColleagueByEmail = async (email) => {

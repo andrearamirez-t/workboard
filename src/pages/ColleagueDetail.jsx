@@ -21,11 +21,6 @@ import { Footer } from "@/components/ui/Footer"
 
 const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
-function hashHue(str) {
-  let h = 0
-  for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h)
-  return Math.abs(h * 137.508) % 360
-}
 
 function parseLocalDate(str) {
   if (!str) return null
@@ -95,7 +90,7 @@ function getAvance(proyecto) {
 }
 
 export default function ColleagueDetail() {
-  const { id } = useParams()
+  const { id, semilleroId } = useParams()
   const navigate = useNavigate()
   const { user, myColleagueId } = useAuth()
   const isOwn = id === myColleagueId
@@ -171,7 +166,7 @@ export default function ColleagueDetail() {
     try {
       await addTask(id, taskForm, user)
       if (Number(taskForm.avance) >= 100) {
-        notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), assigneeName: companero?.nombre || id, path: `/colleague/${id}` }).catch(() => {})
+        notificarTareaCompletada({ taskTitle: taskForm.titulo.trim(), assigneeName: companero?.nombre || id, path: `/semillero/${semilleroId}/colleague/${id}`, semilleroId }).catch(() => {})
       }
       if (companero?.whatsapp) {
         queueTareaNotification({
@@ -187,7 +182,8 @@ export default function ColleagueDetail() {
           tipo: "tarea_asignada",
           titulo: "Te asignaron una nueva tarea",
           subtitulo: taskForm.titulo.trim(),
-          path: `/colleague/${id}`,
+          path: `/semillero/${semilleroId}/colleague/${id}`,
+          semilleroId,
         }).catch(() => {})
       }
       setTaskForm({ titulo: "", descripcion: "", fechaInicio: "", fechaLimite: "", avance: 0 })
@@ -208,7 +204,8 @@ export default function ColleagueDetail() {
         notificarTareaCompletada({
           taskTitle: task?.titulo,
           assigneeName: companero?.nombre || id,
-          path: `/colleague/${id}`,
+          path: `/semillero/${semilleroId}/colleague/${id}`,
+          semilleroId,
         }).catch(() => {})
       }
     } catch (err) {
@@ -241,7 +238,7 @@ export default function ColleagueDetail() {
       await updateTask(id, task.id, data)
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...data } : t))
       if (prevAvance < 100 && newAvance >= 100) {
-        notificarTareaCompletada({ taskTitle: data.titulo, assigneeName: colleague?.nombre || id, path: `/colleague/${id}` }).catch(() => {})
+        notificarTareaCompletada({ taskTitle: data.titulo, assigneeName: colleague?.nombre || id, path: `/semillero/${semilleroId}/colleague/${id}`, semilleroId }).catch(() => {})
       }
       setEditingTaskId(null)
     } catch (err) {
@@ -310,7 +307,7 @@ export default function ColleagueDetail() {
       await updateTaskAvance(id, taskId, newAvance, nuevoEstado)
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, avance: newAvance, ...(nuevoEstado ? { estado: nuevoEstado } : {}) } : t))
       if (newAvance >= 100 && task?.estado !== "Hecha") {
-        notificarTareaCompletada({ taskTitle: task?.titulo, assigneeName: companero?.nombre || id, path: `/colleague/${id}` }).catch(() => {})
+        notificarTareaCompletada({ taskTitle: task?.titulo, assigneeName: companero?.nombre || id, path: `/semillero/${semilleroId}/colleague/${id}`, semilleroId }).catch(() => {})
       }
     } catch (err) {
       console.error("[Workboard] Error actualizando avance:", err)
@@ -356,7 +353,7 @@ export default function ColleagueDetail() {
   const handleDelete = async () => {
     if (!confirm(`¿Eliminar a ${companero.nombre}? No se puede deshacer.`)) return
     await deleteColleague(id)
-    navigate("/dashboard")
+    navigate(`/semillero/${semilleroId}/dashboard`)
   }
 
   const handleDeleteProject = async (proyecto) => {
@@ -384,7 +381,7 @@ export default function ColleagueDetail() {
     e.preventDefault()
     if (!nota.trim()) return
     setSaving(true)
-    await addLog({ colleagueId: id, colleagueName: companero.nombre, nota, userId: user.uid })
+    await addLog({ colleagueId: id, colleagueName: companero.nombre, nota, userId: user.uid, semilleroId })
     setNota("")
     setLogs(await getLogs(id))
     setSaving(false)
@@ -433,7 +430,8 @@ export default function ColleagueDetail() {
         tipo: "feedback_recibido",
         titulo: "Tienes nueva retroalimentación",
         subtitulo: feedbackText.trim().slice(0, 80),
-        path: `/colleague/${id}`,
+        path: `/semillero/${semilleroId}/colleague/${id}`,
+        semilleroId,
       }).catch(() => {})
     }
     setFeedbackText("")
@@ -464,15 +462,13 @@ export default function ColleagueDetail() {
     </div>
   )
 
-  const h = companero.colorHue ?? hashHue(id)
-
   return (
     <div className="min-h-screen bg-background flex flex-col">
 
       {/* ── Header ── */}
       <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
         style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
-        <button onClick={() => navigate("/dashboard")}
+        <button onClick={() => navigate(`/semillero/${semilleroId}/dashboard`)}
           className="text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors">
           ← Volver
         </button>
@@ -481,14 +477,14 @@ export default function ColleagueDetail() {
 
       {/* ── Hero ── */}
       <div className="relative overflow-hidden px-6 py-12"
-        style={{ background: `linear-gradient(145deg, oklch(0.20 0.050 ${h}), oklch(0.15 0.035 ${(h + 30) % 360}))` }}>
+        style={{ background: "linear-gradient(125deg, oklch(0.46 0.13 165) 0%, oklch(0.40 0.14 185) 45%, oklch(0.48 0.14 245) 100%)" }}>
 
         {/* Background glow */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-0 right-0 w-72 h-72 opacity-30"
-            style={{ background: `radial-gradient(circle at top right, oklch(0.72 0.18 ${h}), transparent 65%)`, filter: "blur(40px)" }} />
+            style={{ background: "radial-gradient(circle at top right, oklch(0.62 0.14 165), transparent 65%)", filter: "blur(40px)" }} />
           <div className="absolute bottom-0 left-0 w-48 h-48 opacity-20"
-            style={{ background: `radial-gradient(circle, oklch(0.65 0.16 ${(h + 50) % 360}), transparent 65%)`, filter: "blur(30px)" }} />
+            style={{ background: "radial-gradient(circle, oklch(0.58 0.16 295), transparent 65%)", filter: "blur(30px)" }} />
         </div>
 
         <div className="max-w-4xl mx-auto w-full relative">
@@ -497,8 +493,8 @@ export default function ColleagueDetail() {
             {/* Avatar */}
             <div className="w-20 h-20 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-3xl overflow-hidden"
               style={{
-                background: companero.avatarUrl ? "var(--card)" : `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))`,
-                boxShadow: `0 12px 32px oklch(0.55 0.20 ${h} / 45%), 0 0 0 2px oklch(0.72 0.14 ${h} / 30%)`,
+                background: companero.avatarUrl ? "var(--card)" : "linear-gradient(135deg, oklch(0.62 0.18 165), oklch(0.54 0.22 205))",
+                boxShadow: "0 12px 32px oklch(0.52 0.13 165 / 45%), 0 0 0 2px oklch(0.68 0.12 165 / 30%)",
               }}>
               {companero.avatarUrl
                 ? <img src={companero.avatarUrl} alt={companero.nombre} className="w-full h-full object-cover" />
@@ -511,12 +507,12 @@ export default function ColleagueDetail() {
             {/* Info */}
             <div className="flex-1 min-w-0">
               <h1 className="text-[28px] font-bold text-white leading-tight tracking-tight">{companero.nombre}</h1>
-              <p className="text-[14px] mt-1" style={{ color: `oklch(0.78 0.08 ${h})` }}>
+              <p className="text-[14px] mt-1 text-white/80">
                 {companero.rol || "Sin rol registrado"}
               </p>
               {companero.area && (
                 <span className="inline-block text-[11px] font-semibold px-3 py-1 rounded-full mt-2.5"
-                  style={{ backgroundColor: `oklch(0.28 0.06 ${h})`, color: `oklch(0.88 0.10 ${h})` }}>
+                  style={{ backgroundColor: "oklch(0.30 0.06 165)", color: "oklch(0.88 0.08 165)" }}>
                   {companero.area}
                 </span>
               )}
@@ -525,12 +521,12 @@ export default function ColleagueDetail() {
             {/* Actions — solo visible para el dueño o creador del perfil */}
             {canEdit && (
               <div className="flex gap-2 flex-shrink-0">
-                <button onClick={() => navigate(`/colleague/${id}/edit`)}
+                <button onClick={() => navigate(`/semillero/${semilleroId}/colleague/${id}/edit`)}
                   className="text-[12px] font-semibold px-4 py-2 rounded-xl border transition-all"
                   style={{
-                    borderColor: `oklch(0.55 0.14 ${h} / 0.4)`,
-                    color: `oklch(0.88 0.08 ${h})`,
-                    backgroundColor: `oklch(0.28 0.06 ${h} / 0.35)`,
+                    borderColor: "oklch(0.55 0.14 165 / 0.4)",
+                    color: "oklch(0.92 0.05 165)",
+                    backgroundColor: "oklch(0.30 0.06 165 / 0.35)",
                   }}>
                   Editar
                 </button>
@@ -550,7 +546,7 @@ export default function ColleagueDetail() {
         {/* ── Info principal ── */}
         {(companero.trabajaEn || companero.herramientas?.length > 0 || companero.notas) && (
           <div className="bg-card border border-border rounded-2xl overflow-hidden"
-            style={{ borderLeftColor: `oklch(0.60 0.18 ${h})`, borderLeftWidth: "3px" }}>
+            style={{ borderLeftColor: "oklch(0.52 0.13 165)", borderLeftWidth: "3px" }}>
             <div className="p-6 space-y-5">
               {companero.trabajaEn && (
                 <div>
@@ -564,7 +560,7 @@ export default function ColleagueDetail() {
                   <div className="flex flex-wrap gap-1.5">
                     {companero.herramientas.map(tool => (
                       <span key={tool} className="text-[12px] px-2.5 py-1 rounded-lg font-medium"
-                        style={{ backgroundColor: `oklch(0.60 0.18 ${h} / 0.10)`, color: `oklch(0.48 0.18 ${h})` }}>
+                        style={{ backgroundColor: "oklch(0.62 0.12 230 / 0.12)", color: "oklch(0.45 0.14 230)" }}>
                         {tool}
                       </span>
                     ))}
@@ -593,7 +589,7 @@ export default function ColleagueDetail() {
               )}
             </h2>
             {canEdit && (
-              <Button size="sm" className="text-[13px] h-8" onClick={() => navigate(`/colleague/${id}/project/new`)}>
+              <Button size="sm" className="text-[13px] h-8" onClick={() => navigate(`/semillero/${semilleroId}/colleague/${id}/project/new`)}>
                 + Proyecto
               </Button>
             )}
@@ -626,11 +622,12 @@ export default function ColleagueDetail() {
             return filtered.length > 0 ? (
             <div className="overflow-y-auto space-y-3 pr-0.5" style={{ maxHeight: "520px" }}>
               {filtered.map((proyecto, index) => {
-                const pH = (h + index * 55) % 360
+                const CHART_HUES = [165, 295, 40, 230, 10]
+                const pH = CHART_HUES[index % CHART_HUES.length]
                 const pState = proyecto.estado ? PROJECT_STATE_STYLE[proyecto.estado] : null
                 return (
                   <div key={index} className="bg-card border border-border rounded-2xl overflow-hidden group"
-                    style={{ borderLeftColor: `oklch(0.60 0.16 ${pH})`, borderLeftWidth: "3px" }}>
+                    style={{ borderLeftColor: `oklch(0.58 0.16 ${pH})`, borderLeftWidth: "3px" }}>
                     <div className="p-5">
 
                       {/* Project header */}
@@ -647,7 +644,7 @@ export default function ColleagueDetail() {
                           </div>
                           {proyecto.area && (
                             <span className="inline-block text-[11px] font-semibold px-2 py-0.5 rounded-full mt-1.5"
-                              style={{ backgroundColor: `oklch(0.58 0.12 ${pH} / 0.18)`, color: `oklch(0.58 0.16 ${pH})` }}>
+                              style={{ backgroundColor: "oklch(0.52 0.13 165 / 0.12)", color: "oklch(0.52 0.13 165)" }}>
                               {proyecto.area}
                             </span>
                           )}
@@ -655,9 +652,9 @@ export default function ColleagueDetail() {
                         {canEdit && (
                           <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                             <button
-                              onClick={() => navigate(`/colleague/${id}/project/new`, { state: { editProject: proyecto } })}
+                              onClick={() => navigate(`/semillero/${semilleroId}/colleague/${id}/project/new`, { state: { editProject: proyecto } })}
                               className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
-                              style={{ color: `oklch(0.42 0.16 ${pH})` }}>
+                              style={{ color: "oklch(0.42 0.14 165)" }}>
                               Editar
                             </button>
                             {grupos.length > 0 && (
@@ -822,8 +819,14 @@ export default function ColleagueDetail() {
               })}
             </div>
           ) : (
-            <div className="text-center py-12 text-muted-foreground bg-card border border-border rounded-2xl">
-              <p className="text-[13px]">{projectSearch ? "Sin resultados para esa búsqueda." : "Sin proyectos registrados."}</p>
+            <div className="flex flex-col items-center justify-center py-14 gap-3 bg-card border border-border rounded-2xl">
+              <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
+                style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.13 165)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+                </svg>
+              </div>
+              <p className="text-[13px] font-medium text-muted-foreground">{projectSearch ? "Sin resultados para esa búsqueda." : "Sin proyectos registrados."}</p>
             </div>
           )
         })()}
@@ -835,7 +838,7 @@ export default function ColleagueDetail() {
 
           {(isAdmin || isOwn) && (
             <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
-              style={{ borderTopColor: `oklch(0.60 0.16 ${h})`, borderTopWidth: "3px" }}>
+              style={{ borderTopColor: "oklch(0.52 0.13 165)", borderTopWidth: "3px" }}>
               <form onSubmit={handleAddLog} className="p-5">
                 <div className="flex justify-end mb-2.5">
                   <button type="button" onClick={() => setShowEmoji(v => !v)}
@@ -856,7 +859,7 @@ export default function ColleagueDetail() {
                   className="w-full bg-muted/50 border border-border rounded-xl px-4 py-3 text-[14px] text-foreground placeholder:text-muted-foreground mb-3 focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none transition-all" />
                 <button type="submit" disabled={saving}
                   className="text-[13px] font-semibold px-5 py-2 rounded-xl text-white transition-all hover:opacity-90 disabled:opacity-50"
-                  style={{ background: `linear-gradient(135deg, oklch(0.58 0.20 ${h}), oklch(0.50 0.22 ${(h + 25) % 360}))` }}>
+                  style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.44 0.14 185))" }}>
                   {saving ? "Guardando…" : "Guardar nota"}
                 </button>
               </form>
@@ -889,7 +892,7 @@ export default function ColleagueDetail() {
                         <div className="flex gap-2">
                           <button onClick={() => handleSaveEditLog(log.id)}
                             className="text-[12px] font-semibold px-3.5 py-1.5 rounded-lg text-white"
-                            style={{ backgroundColor: `oklch(0.55 0.16 ${h})` }}>
+                            style={{ backgroundColor: "oklch(0.52 0.13 165)" }}>
                             Guardar
                           </button>
                           <button onClick={() => setEditingLogId(null)}
@@ -901,7 +904,7 @@ export default function ColleagueDetail() {
                     ) : (
                       <div className="flex gap-3">
                         <div className="w-1.5 h-1.5 rounded-full mt-[7px] flex-shrink-0"
-                          style={{ backgroundColor: `oklch(0.62 0.16 ${h})` }} />
+                          style={{ backgroundColor: "oklch(0.52 0.13 165)" }} />
                         <div className="flex-1 min-w-0">
                           <p className="text-[14px] text-foreground leading-relaxed">{log.nota}</p>
                           <div className="flex justify-between items-center mt-1.5">
@@ -914,7 +917,7 @@ export default function ColleagueDetail() {
                               <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button onClick={() => handleStartEditLog(log)}
                                   className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
-                                  style={{ color: `oklch(0.42 0.16 ${h})` }}>
+                                  style={{ color: "oklch(0.42 0.14 165)" }}>
                                   Editar
                                 </button>
                                 <button onClick={() => handleDeleteLog(log.id)}
@@ -931,8 +934,14 @@ export default function ColleagueDetail() {
                 ))}
               </div>
             ) : (
-              <div className="text-center py-12 text-muted-foreground bg-card border border-border rounded-2xl">
-                <p className="text-[13px]">{logSearch ? "Sin resultados para esa búsqueda." : "Sin notas aún. Agrega la primera."}</p>
+              <div className="flex flex-col items-center justify-center py-14 gap-3 bg-card border border-border rounded-2xl">
+                <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
+                  style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.13 165)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                  </svg>
+                </div>
+                <p className="text-[13px] font-medium text-muted-foreground">{logSearch ? "Sin resultados para esa búsqueda." : "Sin notas aún. Agrega la primera."}</p>
               </div>
             )
           })()}
@@ -1046,8 +1055,14 @@ export default function ColleagueDetail() {
                 })}
               </div>
             ) : (
-              <div className="text-center py-10 text-muted-foreground bg-card border border-border rounded-2xl">
-                <p className="text-[13px]">
+              <div className="flex flex-col items-center justify-center py-14 gap-3 bg-card border border-border rounded-2xl">
+                <div className="w-12 h-12 rounded-2xl flex items-center justify-center"
+                  style={{ background: "oklch(0.75 0.15 80 / 0.12)" }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="oklch(0.65 0.16 75)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </div>
+                <p className="text-[13px] font-medium text-muted-foreground">
                   {isAdmin ? "Aún no hay retroalimentación para esta persona." : "Aún no tienes retroalimentación."}
                 </p>
               </div>
