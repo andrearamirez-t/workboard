@@ -88,3 +88,9 @@ export const updateProject = async (colleagueId, oldProject, newProject) => {
   })
   return await updateDoc(docRef, { proyectos: updated })
 }
+
+export const updatePerfilProfesional = async (colleagueId, key, data) => {
+  return await updateDoc(doc(db, "companeros", colleagueId), {
+    [`perfilProfesional.${key}`]: data,
+  })
+}

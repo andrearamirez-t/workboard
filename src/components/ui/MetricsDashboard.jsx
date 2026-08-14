@@ -6,7 +6,7 @@ import { format, subWeeks, startOfWeek } from "date-fns"
 import { es } from "date-fns/locale"
 import { exportPDF, exportExcel } from "@/utils/exportReport"
 import { useState } from "react"
-import { FileDown, Sheet } from "lucide-react"
+import { FileDown, Sheet, ChevronDown } from "lucide-react"
 
 const OKLCH_PALETTE = [
   "#1fa882",  // teal — chart-1 (primary)
@@ -49,6 +49,7 @@ function avanceLabel(v) {
 
 export function MetricsDashboard({ colleagues, logs }) {
   const [exporting, setExporting] = useState(null)
+  const [showInactive, setShowInactive] = useState(false)
 
   const handleExport = async (type) => {
     setExporting(type)
@@ -118,6 +119,46 @@ export function MetricsDashboard({ colleagues, logs }) {
     return d && d >= new Date(now.getTime() - 30 * 86400000)
   }).length
   const herramientasUnicas = new Set(colleagues.flatMap(c => c.herramientas || [])).size
+
+  // ── 5. Análisis por persona (deduplicado por email, luego nombre) ──
+  const _richness = c => (c.proyectos?.length || 0) * 10 + (c.herramientas?.length || 0) * 2 + (c.rol ? 5 : 0) + (c.nombre?.length || 0)
+  const _byEmail  = new Map()
+  const _noEmail  = []
+  for (const c of colleagues) {
+    const email = (c.email || "").trim().toLowerCase()
+    if (email) {
+      const ex = _byEmail.get(email)
+      if (!ex || _richness(c) > _richness(ex)) _byEmail.set(email, c)
+    } else { _noEmail.push(c) }
+  }
+  const _seenNames = new Set([..._byEmail.values()].map(c => (c.nombre || "").trim().toLowerCase()))
+  const _deduped = [..._byEmail.values()]
+  for (const c of _noEmail) {
+    const nk = (c.nombre || "").trim().toLowerCase()
+    if (!nk || _seenNames.has(nk)) continue
+    _seenNames.add(nk); _deduped.push(c)
+  }
+
+  const personRows = _deduped
+    .map(c => {
+      const proyectos = c.proyectos || []
+      const avg = proyectos.length
+        ? Math.round(proyectos.reduce((s, p) => s + (p.avance ?? 0), 0) / proyectos.length)
+        : null
+      const logCount = logs.filter(l => l.colleagueId === c.id).length
+      const pendientes = proyectos.filter(p => p.estado !== "Finalizado" && p.estado !== "Entregado").length
+      return { ...c, proyectosCount: proyectos.length, avg, logCount, pendientes }
+    })
+    .sort((a, b) =>
+      b.proyectosCount !== a.proyectosCount
+        ? b.proyectosCount - a.proyectosCount
+        : b.logCount - a.logCount
+    )
+
+  const activeRows   = personRows.filter(r => r.proyectosCount > 0 || r.logCount > 0)
+  const inactiveRows = personRows
+    .filter(r => r.proyectosCount === 0 && r.logCount === 0)
+    .sort((a, b) => (a.nombre || "").localeCompare(b.nombre || "", "es"))
 
   const noData = (msg) => (
     <div className="flex items-center justify-center h-32 text-[12px] text-muted-foreground">{msg}</div>
@@ -224,66 +265,104 @@ export function MetricsDashboard({ colleagues, logs }) {
 
       {/* ── Análisis por persona ─────────────────────────────── */}
       <div className="bg-card border border-border rounded-2xl p-5">
-        <SectionTitle>Análisis por persona</SectionTitle>
-        <div className="space-y-3">
-          {colleagues.length === 0 ? (
-            <p className="text-[12px] text-muted-foreground">Sin compañeros registrados.</p>
-          ) : (
-            colleagues.map(c => {
-              const proyectos = c.proyectos || []
-              const avg = proyectos.length
-                ? Math.round(proyectos.reduce((s, p) => s + (p.avance ?? 0), 0) / proyectos.length)
-                : null
-              const logCount = logs.filter(l => l.colleagueId === c.id).length
-              const tools = (c.herramientas || []).slice(0, 5)
-              const pendientes = proyectos.filter(p => p.estado !== "Finalizado" && p.estado !== "Entregado").length
-              return (
-                <div key={c.id} className="flex flex-col sm:flex-row sm:items-center gap-3 py-3 border-b border-border/50 last:border-0">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-[13px] font-semibold text-foreground">{c.nombre}</p>
-                      <span className="text-[11px] text-muted-foreground">{c.rol || "Sin rol"}</span>
-                    </div>
-                    {tools.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {tools.map(t => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{t}</span>
-                        ))}
-                        {(c.herramientas || []).length > 5 && (
-                          <span className="text-[10px] text-muted-foreground px-1">+{c.herramientas.length - 5}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-4 flex-shrink-0 text-[12px]">
-                    <div className="text-center">
-                      <p className="font-bold text-foreground text-[18px] leading-none">{proyectos.length}</p>
-                      <p className="text-muted-foreground text-[10px]">proyectos</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="font-bold text-foreground text-[18px] leading-none">{pendientes}</p>
-                      <p className="text-muted-foreground text-[10px]">en curso</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="font-bold text-foreground text-[18px] leading-none">{logCount}</p>
-                      <p className="text-muted-foreground text-[10px]">notas</p>
-                    </div>
-                    {avg !== null && (
-                      <div className="flex flex-col items-center gap-1">
-                        <div className="w-20 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "oklch(0.40 0.02 260 / 0.3)" }}>
-                          <div className="h-full rounded-full transition-all" style={{ width: `${avg}%`, background: avanceColor(avg) }} />
-                        </div>
-                        <p className="text-[10px] font-medium" style={{ color: avanceColor(avg) }}>
-                          {avg}% · {avanceLabel(avg)}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })
-          )}
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">
+            Análisis por persona
+          </p>
+          <span className="text-[11px] text-muted-foreground">
+            {activeRows.length} con actividad · {inactiveRows.length} sin actividad
+          </span>
         </div>
+
+        {/* Cabecera de columnas */}
+        {activeRows.length > 0 && (
+          <div className="flex items-center gap-3 pb-1.5 mb-1 border-b border-border/50">
+            <div className="w-7 flex-shrink-0" />
+            <div className="flex-1" />
+            <div className="flex items-center gap-3 flex-shrink-0">
+              {["Proy.", "Curso", "Notas", "Avance"].map(h => (
+                <div key={h} className="text-center" style={{ width: h === "Avance" ? 64 : 36 }}>
+                  <span className="text-[10px] font-semibold text-muted-foreground">{h}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Filas activas */}
+        {personRows.length === 0 ? (
+          <p className="text-[12px] text-muted-foreground">Sin compañeros registrados.</p>
+        ) : activeRows.length === 0 ? (
+          <p className="text-[12px] text-muted-foreground py-4 text-center">Nadie ha registrado proyectos o actividad aún.</p>
+        ) : (
+          activeRows.map(c => (
+            <div key={c.id} className="flex items-center gap-3 py-2 border-b border-border/30 last:border-0">
+              <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0"
+                style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))" }}>
+                {c.nombre?.charAt(0)?.toUpperCase() || "?"}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[12px] font-semibold text-foreground truncate">{c.nombre}</span>
+                  {c.rol && <span className="text-[10px] text-muted-foreground">{c.rol}</span>}
+                </div>
+                {(c.herramientas || []).length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    {(c.herramientas || []).slice(0, 4).map(t => (
+                      <span key={t} className="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground">{t}</span>
+                    ))}
+                    {(c.herramientas || []).length > 4 && (
+                      <span className="text-[9px] text-muted-foreground">+{(c.herramientas || []).length - 4}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0">
+                {[{ v: c.proyectosCount }, { v: c.pendientes }, { v: c.logCount }].map((s, i) => (
+                  <div key={i} className="text-center" style={{ width: 36 }}>
+                    <p className="text-[14px] font-bold text-foreground leading-none">{s.v}</p>
+                  </div>
+                ))}
+                <div style={{ width: 64 }}>
+                  {c.avg !== null ? (
+                    <div className="flex flex-col gap-0.5">
+                      <div className="w-full h-1 rounded-full overflow-hidden bg-muted">
+                        <div className="h-full rounded-full" style={{ width: `${c.avg}%`, background: avanceColor(c.avg) }} />
+                      </div>
+                      <p className="text-[9px] font-semibold text-right" style={{ color: avanceColor(c.avg) }}>
+                        {c.avg}% · {avanceLabel(c.avg)}
+                      </p>
+                    </div>
+                  ) : <div />}
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+
+        {/* Sin actividad — colapsable */}
+        {inactiveRows.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-border/40">
+            <button onClick={() => setShowInactive(v => !v)}
+              className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors select-none py-1 w-full text-left">
+              <ChevronDown size={12} style={{ transform: showInactive ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s", flexShrink: 0 }} />
+              {inactiveRows.length} persona{inactiveRows.length !== 1 ? "s" : ""} sin proyectos ni notas registradas
+            </button>
+            {showInactive && (
+              <div className="mt-2 overflow-y-auto" style={{ maxHeight: 220 }}>
+                {inactiveRows.map(c => (
+                  <div key={c.id} className="flex items-center gap-2.5 py-1.5 border-b border-border/20 last:border-0 opacity-60">
+                    <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 bg-muted text-muted-foreground">
+                      {c.nombre?.charAt(0)?.toUpperCase() || "?"}
+                    </div>
+                    <span className="text-[12px] text-muted-foreground truncate flex-1">{c.nombre}</span>
+                    {c.rol && <span className="text-[10px] text-muted-foreground/60 flex-shrink-0">{c.rol}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Exportar reporte ─────────────────────────────────── */}

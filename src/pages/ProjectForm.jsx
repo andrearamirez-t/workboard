@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react"
 import { downloadFile } from "@/utils/download"
 import { useParams, useNavigate, useLocation } from "react-router-dom"
-import { doc, updateDoc, arrayUnion } from "firebase/firestore"
+import { doc, updateDoc, arrayUnion, addDoc, collection, serverTimestamp } from "firebase/firestore"
 import { db } from "@/services/firebase"
 import { updateProject } from "@/services/colleagues.service"
 import { uploadDocument, getDocuments, deleteDocument, MAX_FILE_SIZE } from "@/services/storage.service"
@@ -185,6 +185,16 @@ export default function ProjectForm() {
         await updateProject(id, editData, proyecto)
       } else {
         await updateDoc(doc(db, "companeros", id), { proyectos: arrayUnion(proyecto) })
+        // Notificar al coordinador de equipo sobre el nuevo proyecto
+        addDoc(collection(db, "logs"), {
+          colleagueId: id,
+          colleagueName: user?.displayName || user?.email || "Alguien",
+          semilleroId,
+          tipo: "proyecto_agregado",
+          nota: proyecto.nombre,
+          creadoPor: user?.uid || null,
+          createdAt: serverTimestamp(),
+        }).catch(() => {})
       }
       navigate(`/semillero/${semilleroId}/colleague/${id}`)
     } catch (err) {

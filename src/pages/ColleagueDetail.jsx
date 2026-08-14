@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useMemo } from "react"
 import { downloadFile } from "@/utils/download"
 import { useParams, useNavigate } from "react-router-dom"
 import { doc, getDoc } from "firebase/firestore"
@@ -19,7 +19,6 @@ import { es } from "date-fns/locale"
 import EmojiPicker from "emoji-picker-react"
 import { Footer } from "@/components/ui/Footer"
 
-const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
 
 function parseLocalDate(str) {
@@ -92,10 +91,8 @@ function getAvance(proyecto) {
 export default function ColleagueDetail() {
   const { id, semilleroId } = useParams()
   const navigate = useNavigate()
-  const { user, myColleagueId } = useAuth()
+  const { user, myColleagueId, isAdmin, isSuperAdmin } = useAuth()
   const isOwn = id === myColleagueId
-  const isAdmin = ADMIN_EMAILS.includes(user?.email)
-  const canEdit = isOwn || isAdmin
 
   const [companero, setCompanero] = useState(null)
   const [logs, setLogs] = useState([])
@@ -140,6 +137,19 @@ export default function ColleagueDetail() {
   const taskFileInputRef = useRef(null)
   const uploadingTaskIdRef = useRef(null)
 
+  // isOwnProfile: true si el uid del companero cargado coincide con el usuario actual.
+  // Esto cubre el caso en que myColleagueId no esté sincronizado (ej: superadmins).
+  const isOwnProfile = useMemo(
+    () => isOwn || (!!companero?.uid && companero.uid === user?.uid),
+    [isOwn, companero?.uid, user?.uid]
+  )
+  // canEdit: dueño del perfil (por cualquier método) o superadmin
+  const canEdit = isOwnProfile || isSuperAdmin
+
+  // ── Navegación ────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState("proyectos")
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
   const loadData = async () => {
     const snap = await getDoc(doc(db, "companeros", id))
     if (snap.exists()) setCompanero({ id: snap.id, ...snap.data() })
@@ -152,12 +162,12 @@ export default function ColleagueDetail() {
   }, [id])
 
   useEffect(() => {
-    if (isOwn || isAdmin) getFeedback(id).then(setFeedback)
-  }, [id, isOwn, isAdmin])
+    if (isOwnProfile || isAdmin) getFeedback(id).then(setFeedback)
+  }, [id, isOwnProfile, isAdmin])
 
   useEffect(() => {
-    if (isOwn || isAdmin) getTasks(id).then(setTasks)
-  }, [id, isOwn, isAdmin])
+    if (isOwnProfile || isAdmin) getTasks(id).then(setTasks)
+  }, [id, isOwnProfile, isAdmin])
 
   const handleAddTask = async (e) => {
     e.preventDefault()
@@ -462,121 +472,217 @@ export default function ColleagueDetail() {
     </div>
   )
 
+  const profileHue = companero?.colorHue ?? 165
+  const profileHue2 = companero?.colorHue2 ?? null
+  const profileGradient = (h1, h2End) =>
+    `linear-gradient(135deg, oklch(0.62 0.18 ${h1}), oklch(0.54 0.22 ${profileHue2 ?? h2End}))`
+
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="min-h-screen bg-background flex">
 
-      {/* ── Header ── */}
-      <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
-        style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
-        <button onClick={() => navigate(`/semillero/${semilleroId}/dashboard`)}
-          className="text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors">
-          ← Volver
-        </button>
-        <ThemeToggle />
-      </header>
+      {/* Mobile backdrop */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-40 lg:hidden"
+          style={{ background: "oklch(0 0 0 / 45%)", backdropFilter: "blur(2px)" }}
+          onClick={() => setSidebarOpen(false)} />
+      )}
 
-      {/* ── Hero ── */}
-      <div className="relative overflow-hidden px-6 py-12"
-        style={{ background: "linear-gradient(125deg, oklch(0.46 0.13 165) 0%, oklch(0.40 0.14 185) 45%, oklch(0.48 0.14 245) 100%)" }}>
+      {/* ── Sidebar ── */}
+      <aside
+        className={`fixed top-0 left-0 bottom-0 z-50 flex flex-col border-r border-border/50
+          transition-transform duration-300 ease-in-out lg:translate-x-0
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+        style={{ width: 272, background: "var(--sidebar)" }}>
 
-        {/* Background glow */}
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-0 right-0 w-72 h-72 opacity-30"
-            style={{ background: "radial-gradient(circle at top right, oklch(0.62 0.14 165), transparent 65%)", filter: "blur(40px)" }} />
-          <div className="absolute bottom-0 left-0 w-48 h-48 opacity-20"
-            style={{ background: "radial-gradient(circle, oklch(0.58 0.16 295), transparent 65%)", filter: "blur(30px)" }} />
+        {/* Volver */}
+        <div className="px-5 pt-5 pb-4 flex-shrink-0">
+          <button onClick={() => { navigate(`/semillero/${semilleroId}/dashboard`); setSidebarOpen(false) }}
+            className="text-[12px] font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+            ← Volver al equipo
+          </button>
         </div>
 
-        <div className="max-w-4xl mx-auto w-full relative">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-5">
+        <div className="mx-4 h-px bg-border/60 flex-shrink-0" />
 
-            {/* Avatar */}
-            <div className="w-20 h-20 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-3xl overflow-hidden"
-              style={{
-                background: companero.avatarUrl ? "var(--card)" : "linear-gradient(135deg, oklch(0.62 0.18 165), oklch(0.54 0.22 205))",
-                boxShadow: "0 12px 32px oklch(0.52 0.13 165 / 45%), 0 0 0 2px oklch(0.68 0.12 165 / 30%)",
-              }}>
-              {companero.avatarUrl
-                ? <img src={companero.avatarUrl} alt={companero.nombre} className="w-full h-full object-cover" />
-                : companero.avatarEmoji
-                  ? <span className="text-4xl leading-none">{companero.avatarEmoji}</span>
-                  : companero.nombre?.charAt(0).toUpperCase()
-              }
-            </div>
-
-            {/* Info */}
-            <div className="flex-1 min-w-0">
-              <h1 className="text-[28px] font-bold text-white leading-tight tracking-tight">{companero.nombre}</h1>
-              <p className="text-[14px] mt-1 text-white/80">
-                {companero.rol || "Sin rol registrado"}
-              </p>
-              {companero.area && (
-                <span className="inline-block text-[11px] font-semibold px-3 py-1 rounded-full mt-2.5"
-                  style={{ backgroundColor: "oklch(0.30 0.06 165)", color: "oklch(0.88 0.08 165)" }}>
-                  {companero.area}
-                </span>
-              )}
-            </div>
-
-            {/* Actions — solo visible para el dueño o creador del perfil */}
-            {canEdit && (
-              <div className="flex gap-2 flex-shrink-0">
-                <button onClick={() => navigate(`/semillero/${semilleroId}/colleague/${id}/edit`)}
-                  className="text-[12px] font-semibold px-4 py-2 rounded-xl border transition-all"
-                  style={{
-                    borderColor: "oklch(0.55 0.14 165 / 0.4)",
-                    color: "oklch(0.92 0.05 165)",
-                    backgroundColor: "oklch(0.30 0.06 165 / 0.35)",
-                  }}>
-                  Editar
-                </button>
-                <button onClick={handleDelete}
-                  className="text-[12px] font-semibold px-4 py-2 rounded-xl text-white transition-all hover:opacity-80"
-                  style={{ backgroundColor: "oklch(0.48 0.20 27)" }}>
-                  Eliminar
-                </button>
-              </div>
+        {/* Avatar + nombre + rol */}
+        <div className="px-5 py-6 flex-shrink-0 text-center">
+          <div className="w-[84px] h-[84px] rounded-2xl flex items-center justify-center text-white font-bold text-3xl overflow-hidden mx-auto mb-3"
+            style={{
+              background: companero.avatarUrl ? "var(--muted)" : profileGradient(profileHue, (profileHue + 40) % 360),
+              boxShadow: `0 8px 28px oklch(0.52 0.18 ${profileHue} / 30%)`,
+            }}>
+            {companero.avatarUrl
+              ? <img src={companero.avatarUrl} alt={companero.nombre} className="w-full h-full object-cover" />
+              : companero.avatarEmoji
+                ? <span className="text-4xl leading-none">{companero.avatarEmoji}</span>
+                : companero.nombre?.charAt(0).toUpperCase()
+            }
+          </div>
+          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+            <p className="text-[15px] font-bold text-foreground leading-snug">{companero.nombre}</p>
+            {isOwnProfile && (
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                style={{ backgroundColor: "oklch(0.52 0.13 165 / 0.14)", color: "oklch(0.42 0.13 165)" }}>Tú</span>
             )}
           </div>
+          {companero.rol && <p className="text-[12px] text-muted-foreground mt-0.5">{companero.rol}</p>}
+          {companero.area && (
+            <span className="inline-block text-[10px] font-semibold px-2.5 py-0.5 rounded-full mt-2"
+              style={{ backgroundColor: `oklch(0.62 0.18 ${profileHue} / 0.12)`, color: `oklch(0.42 0.18 ${profileHue})` }}>
+              {companero.area}
+            </span>
+          )}
         </div>
-      </div>
 
-      <main className="max-w-4xl mx-auto px-6 py-8 w-full flex-1 space-y-6">
+        <div className="mx-4 h-px bg-border/60 flex-shrink-0" />
 
-        {/* ── Info principal ── */}
-        {(companero.trabajaEn || companero.herramientas?.length > 0 || companero.notas) && (
-          <div className="bg-card border border-border rounded-2xl overflow-hidden"
-            style={{ borderLeftColor: "oklch(0.52 0.13 165)", borderLeftWidth: "3px" }}>
-            <div className="p-6 space-y-5">
-              {companero.trabajaEn && (
-                <div>
-                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Trabajando en</p>
-                  <p className="text-[14px] text-foreground leading-relaxed">{companero.trabajaEn}</p>
-                </div>
+        {/* Info sections */}
+        <div className="flex-1 px-4 overflow-y-auto divide-y divide-border/40">
+
+          {(isAdmin || isOwnProfile) && (companero.correo || companero.email || companero.whatsapp) && (
+            <div className="py-4">
+              <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Contacto</p>
+              {(companero.correo || companero.email) && (
+                <p className="text-[12px] text-foreground truncate">{companero.correo || companero.email}</p>
               )}
-              {companero.herramientas?.length > 0 && (
-                <div>
-                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Herramientas</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {companero.herramientas.map(tool => (
-                      <span key={tool} className="text-[12px] px-2.5 py-1 rounded-lg font-medium"
-                        style={{ backgroundColor: "oklch(0.62 0.12 230 / 0.12)", color: "oklch(0.45 0.14 230)" }}>
-                        {tool}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {companero.notas && (
-                <div>
-                  <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Notas</p>
-                  <p className="text-[14px] text-foreground leading-relaxed">{companero.notas}</p>
-                </div>
+              {companero.whatsapp && (
+                <p className="text-[12px] text-muted-foreground mt-1">{companero.whatsapp}</p>
               )}
             </div>
+          )}
+
+          {companero.trabajaEn && (
+            <div className="py-4">
+              <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Trabajando en</p>
+              <p className="text-[12px] text-foreground leading-relaxed">{companero.trabajaEn}</p>
+            </div>
+          )}
+
+          {companero.herramientas?.length > 0 && (
+            <div className="py-4">
+              <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Stack</p>
+              <div className="flex flex-wrap gap-1.5">
+                {companero.herramientas.map(tool => (
+                  <span key={tool} className="text-[10px] px-2.5 py-1 rounded-md font-medium"
+                    style={{ backgroundColor: "oklch(0.62 0.12 230 / 0.12)", color: "oklch(0.45 0.14 230)" }}>
+                    {tool}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Perfil profesional — solo lectura, edición en "Editar perfil" */}
+          <div className="py-4">
+            <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Perfil profesional</p>
+            <div className="space-y-2">
+              {[
+                { key: "hojaDeVida", label: "Hoja de vida", hue: "145" },
+                { key: "portafolio", label: "Portafolio",   hue: "230" },
+                { key: "pda",        label: "PDA",           hue: "55"  },
+              ].map(({ key, label, hue }) => {
+                const data = companero.perfilProfesional?.[key]
+                return (
+                  <div key={key} className="flex items-center justify-between px-3 py-2.5 rounded-xl"
+                    style={{ background: "var(--muted)" }}>
+                    <span className="text-[12px] font-medium text-foreground">{label}</span>
+                    {data?.url
+                      ? <a href={data.url} target="_blank" rel="noopener noreferrer"
+                          className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                          style={{ background: `oklch(0.62 0.18 ${hue} / 0.14)`, color: `oklch(0.48 0.18 ${hue})` }}>
+                          Abrir ↗
+                        </a>
+                      : <span className="text-[11px] text-muted-foreground/40">—</span>
+                    }
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {companero.notas && (
+            <div className="py-4">
+              <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Notas</p>
+              <p className="text-[12px] text-muted-foreground leading-relaxed break-words">{companero.notas}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="mx-4 h-px bg-border/60 flex-shrink-0" />
+
+        {/* Editar / Eliminar */}
+        {canEdit && (
+          <div className="px-4 py-4 space-y-0.5 flex-shrink-0">
+            <button onClick={() => { navigate(`/semillero/${semilleroId}/colleague/${id}/edit`); setSidebarOpen(false) }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-colors hover:bg-muted text-left"
+              style={{ color: "var(--foreground)" }}>
+              Editar perfil
+            </button>
+            {isSuperAdmin && (
+              <button onClick={handleDelete}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-colors hover:bg-muted/40 text-left"
+                style={{ color: "var(--destructive)" }}>
+                Eliminar
+              </button>
+            )}
           </div>
         )}
+      </aside>
 
+      {/* ── Main ── */}
+      <style>{`@media (min-width: 1024px) { .cd-offset { margin-left: 272px; } }`}</style>
+      <div className="cd-offset flex-1 flex flex-col min-h-screen">
+
+        {/* Topbar */}
+        <header className="sticky top-0 z-20 h-14 border-b border-border/60 px-5 flex items-center gap-3"
+          style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
+          <button className="lg:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-muted transition-colors flex-shrink-0"
+            onClick={() => setSidebarOpen(v => !v)}>
+            <span className="text-muted-foreground font-bold text-[16px]">☰</span>
+          </button>
+          <div className="hidden lg:flex items-center gap-2 text-[12px]">
+            <button onClick={() => navigate(`/semillero/${semilleroId}/dashboard`)}
+              className="text-muted-foreground hover:text-foreground transition-colors">← Equipo</button>
+            <span className="text-muted-foreground">/</span>
+            <span className="font-semibold text-foreground truncate max-w-[200px]">{companero.nombre}</span>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
+          </div>
+        </header>
+
+        {/* Tab bar */}
+        <div className="border-b border-border/50 px-5 flex sticky top-14 z-10"
+          style={{ backgroundColor: "color-mix(in srgb, var(--background) 95%, transparent)", backdropFilter: "blur(12px)" }}>
+          {[
+            { key: "proyectos", label: "Proyectos", count: companero.proyectos?.length || 0 },
+            { key: "bitacora",  label: "Bitácora",  count: logs.length },
+            ...(isAdmin || isOwnProfile ? [
+              { key: "tareas",   label: "Tareas",   count: tasks.filter(t => t.estado !== "Hecha").length },
+              { key: "feedback", label: "Feedback",  count: feedback.length },
+            ] : []),
+          ].map(t => (
+            <button key={t.key} onClick={() => setActiveTab(t.key)}
+              className="flex items-center gap-1.5 px-4 py-3 text-[13px] font-medium border-b-2 transition-all -mb-px whitespace-nowrap"
+              style={activeTab === t.key
+                ? { color: "var(--foreground)", borderBottomColor: "oklch(0.52 0.13 165)" }
+                : { color: "var(--muted-foreground)", borderBottomColor: "transparent" }}>
+              {t.label}
+              {t.count > 0 && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                  style={activeTab === t.key
+                    ? { background: "oklch(0.52 0.13 165 / 0.14)", color: "oklch(0.42 0.13 165)" }
+                    : { background: "var(--muted)", color: "var(--muted-foreground)" }}>
+                  {t.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <main className="flex-1 px-6 py-6 space-y-6">
+
+        {activeTab === "proyectos" && (<>
         {/* ── Proyectos ── */}
         <div>
           <div className="flex justify-between items-center mb-3">
@@ -707,7 +813,7 @@ export default function ColleagueDetail() {
                       )}
 
                       {/* Avance — derivado del estado del proyecto */}
-                      {(isOwn || isAdmin) && (() => {
+                      {(isOwnProfile || isAdmin) && (() => {
                         const av = getAvance(proyecto)
                         const color = av >= 75 ? "oklch(0.60 0.18 145)" : av >= 50 ? "oklch(0.60 0.18 260)" : av >= 25 ? "oklch(0.68 0.18 55)" : "oklch(0.65 0.22 27)"
                         const gradient = av >= 75
@@ -831,12 +937,14 @@ export default function ColleagueDetail() {
           )
         })()}
         </div>
+        </>)}
 
+        {activeTab === "bitacora" && (<>
         {/* ── Bitácora ── */}
         <div>
           <h2 className="text-[18px] font-bold text-foreground tracking-tight mb-4">Bitácora</h2>
 
-          {(isAdmin || isOwn) && (
+          {isOwnProfile && (
             <div className="bg-card border border-border rounded-2xl overflow-hidden mb-3"
               style={{ borderTopColor: "oklch(0.52 0.13 165)", borderTopWidth: "3px" }}>
               <form onSubmit={handleAddLog} className="p-5">
@@ -913,7 +1021,7 @@ export default function ColleagueDetail() {
                                 ? format(log.createdAt.toDate(), "EEEE d 'de' MMMM, yyyy", { locale: es })
                                 : ""}
                             </p>
-                            {(isOwn || log.creadoPor === user?.uid || isAdmin) && (
+                            {(isOwnProfile || log.creadoPor === user?.uid) && (
                               <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button onClick={() => handleStartEditLog(log)}
                                   className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
@@ -946,9 +1054,11 @@ export default function ColleagueDetail() {
             )
           })()}
         </div>
+        </>)}
 
+        {activeTab === "feedback" && (<>
         {/* ── Retroalimentación — solo admin y dueño del perfil ── */}
-        {(isOwn || isAdmin) && (
+        {(isOwnProfile || isAdmin) && (
           <div>
             <div className="flex items-center gap-2.5 mb-4">
               <h2 className="text-[18px] font-bold text-foreground tracking-tight">Retroalimentación</h2>
@@ -1069,9 +1179,11 @@ export default function ColleagueDetail() {
             )}
           </div>
         )}
+        </>)}
 
+        {activeTab === "tareas" && (<>
         {/* ── Tareas — solo admin y dueño del perfil ── */}
-        {(isOwn || isAdmin) && (
+        {(isOwnProfile || isAdmin) && (
           <div>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2.5">
@@ -1265,7 +1377,7 @@ export default function ColleagueDetail() {
                           )}
 
                           {/* Solicitud de más tiempo — dentro del formulario (dueño de la tarea) */}
-                          {isOwn && task.estado !== "Hecha" && !task.plazoAceptado && !task.plazoRechazado && (
+                          {isOwnProfile && task.estado !== "Hecha" && !task.plazoAceptado && !task.plazoRechazado && (
                             <div className="pt-3 border-t border-border space-y-2">
                               <p className="text-[12px] font-semibold text-foreground">⏳ Solicitar más tiempo</p>
                               {task.solicitudPlazo && editandoSolicitudId !== task.id ? (
@@ -1356,7 +1468,7 @@ export default function ColleagueDetail() {
                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                   </button>
                                 )}
-                                {isOwn && task.estado !== "Hecha" && !task.solicitudPlazo && !task.plazoAceptado && !task.plazoRechazado && (
+                                {isOwnProfile && task.estado !== "Hecha" && !task.solicitudPlazo && !task.plazoAceptado && !task.plazoRechazado && (
                                   <button onClick={() => { setEditingTaskId(task.id); setSolicitudMotivo(""); setSolicitudFecha(""); setEditingTaskForm({ titulo: task.titulo, descripcion: task.descripcion || "", fechaInicio: task.fechaInicio || "", fechaLimite: task.fechaLimite || "", avance: task.avance ?? 0 }) }}
                                     className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-foreground"
                                     title="Solicitar más tiempo">
@@ -1375,7 +1487,7 @@ export default function ColleagueDetail() {
                               <p className="text-[12.5px] text-muted-foreground mt-1 leading-relaxed">{task.descripcion}</p>
                             )}
                             {/* Avance — slider interactivo para el dueño no-admin, barra de solo lectura para el resto */}
-                            {isOwn && !isAdmin && task.estado !== "Hecha" ? (
+                            {isOwnProfile && !isAdmin && task.estado !== "Hecha" ? (
                               <div className="mt-2">
                                 <div className="flex justify-between text-[10px] mb-1">
                                   <span className="text-muted-foreground font-medium">Avance</span>
@@ -1480,7 +1592,7 @@ export default function ColleagueDetail() {
                             )}
 
                             {/* Confirmación visible en la tarjeta una vez enviada */}
-                            {task.solicitudPlazo && isOwn && !isAdmin && (
+                            {task.solicitudPlazo && isOwnProfile && !isAdmin && (
                               <p className="text-[11px] mt-1.5 font-medium" style={{ color: "oklch(0.58 0.20 55)" }}>
                                 ⏰ Solicitud de más tiempo enviada
                               </p>
@@ -1504,7 +1616,7 @@ export default function ColleagueDetail() {
                             )}
 
                             {/* Archivos adjuntos de la tarea */}
-                            {(isOwn || isAdmin) && (
+                            {(isOwnProfile || isAdmin) && (
                               <div className="mt-2 pt-2 border-t border-border">
                                 <div className="flex items-center justify-between">
                                   <button
@@ -1550,7 +1662,7 @@ export default function ColleagueDetail() {
                                           {arch.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(arch.size)}</span>}
                                           <button type="button" onClick={() => downloadFile(arch.url, arch.nombre)}
                                             className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
-                                          {(isAdmin || isOwn) && (
+                                          {(isAdmin || isOwnProfile) && (
                                             <button onClick={() => handleDeleteTaskFile(task.id, arch)}
                                               className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">✕</button>
                                           )}
@@ -1578,13 +1690,16 @@ export default function ColleagueDetail() {
           </div>
         )}
 
+        </>)}
+
         {/* Input oculto para archivos de tareas */}
         <input ref={taskFileInputRef} type="file"
           accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
           className="hidden" onChange={handleTaskFileSelected} />
 
-      </main>
-      <Footer />
+        </main>
+        <Footer />
+      </div>
     </div>
   )
 }

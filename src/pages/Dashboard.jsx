@@ -23,12 +23,55 @@ import { crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { importGroupContacts, getGroupContactsCount } from "@/services/groups.service"
 import { parseContactsFile } from "@/utils/parseContactsFile"
 
-const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
 function hashHue(str) {
   let h = 0
   for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h)
   return Math.abs(h * 137.508) % 360
+}
+
+function hexToHue(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255
+  const g = parseInt(hex.slice(3, 5), 16) / 255
+  const b = parseInt(hex.slice(5, 7), 16) / 255
+  const lin = v => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+  const lr = lin(r), lg = lin(g), lb = lin(b)
+  const lv = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb)
+  const mv = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb)
+  const sv = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb)
+  const a = 1.9779984951 * lv - 2.4285922050 * mv + 0.4505937099 * sv
+  const bv = 0.0259040371 * lv + 0.7827717662 * mv - 0.8086757660 * sv
+  let hue = Math.atan2(bv, a) * 180 / Math.PI
+  if (hue < 0) hue += 360
+  return String(Math.round(hue))
+}
+
+function hueToHex(hue) {
+  const h = ((parseInt(hue) % 360) + 360) % 360 / 360
+  const s = 0.65, l = 0.57
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1
+    if (t < 1 / 6) return p + (q - p) * 6 * t
+    if (t < 1 / 2) return q
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
+    return p
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  const r = Math.round(hue2rgb(p, q, h + 1 / 3) * 255).toString(16).padStart(2, "0")
+  const g = Math.round(hue2rgb(p, q, h) * 255).toString(16).padStart(2, "0")
+  const bv = Math.round(hue2rgb(p, q, h - 1 / 3) * 255).toString(16).padStart(2, "0")
+  return `#${r}${g}${bv}`
+}
+
+
+function hexToRgb(hex) {
+  if (!hex || hex.length < 7) return { r: 0, g: 0, b: 0 }
+  return { r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16) }
+}
+
+function rgbToHex(r, g, b) {
+  return `#${[r, g, b].map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")}`
 }
 
 function workloadRingColor(count) {
@@ -72,13 +115,12 @@ function WorkloadRing({ count, size = 52, children }) {
 export default function Dashboard() {
   const navigate = useNavigate()
   const { semilleroId } = useParams()
-  const { user, logout, myColleagueId } = useAuth()
-  const isSuperAdmin = ADMIN_EMAILS.includes(user?.email)
+  const { user, logout, myColleagueId, isSuperAdmin, isAdmin: ctxIsAdmin } = useAuth()
 
   const [semillero, setSemillero] = useState(null)
 
-  // isAdmin = super admin OR coordinator of this semillero
-  const isAdmin = isSuperAdmin || (semillero?.coordinadores?.includes(user?.uid) ?? false)
+  // isAdmin = rol "admin"/"superadmin" en usuarios/{uid} OR coordinador asignado en semillero
+  const isAdmin = ctxIsAdmin || (semillero?.coordinadores?.includes(user?.uid) ?? false)
 
   const [colleagues, setColleagues] = useState([])
   const [loadingData, setLoadingData] = useState(true)
@@ -104,6 +146,7 @@ export default function Dashboard() {
 
   const [equipos, setEquipos] = useState([])
   const [equipoForm, setEquipoForm] = useState({ nombre: "", descripcion: "", color: "295", esPrueba: false })
+  const [editingEquipoHex, setEditingEquipoHex] = useState(null)
   const [showEquipoForm, setShowEquipoForm] = useState(false)
   const [editingEquipo, setEditingEquipo] = useState(null)
   const [savingEquipo, setSavingEquipo] = useState(false)
@@ -131,7 +174,7 @@ export default function Dashboard() {
       setLogs(ls)
       setEquipos(eqs)
       setLoadingData(false)
-      if (ADMIN_EMAILS.includes(user.email)) {
+      if (isSuperAdmin) {
         Promise.all(eqs.map(eq => getGroupContactsCount(eq.id).then(n => [eq.id, n]).catch(() => [eq.id, 0])))
           .then(pairs => setParticipantCounts(Object.fromEntries(pairs)))
       }
@@ -148,7 +191,7 @@ export default function Dashboard() {
   // ── Handlers ─────────────────────────────────────────────────────────────
   const reloadEquipos = () => getEquiposBySemillero(semilleroId).then(eqs => {
     setEquipos(eqs)
-    if (ADMIN_EMAILS.includes(user?.email)) {
+    if (isSuperAdmin) {
       Promise.all(eqs.map(eq => getGroupContactsCount(eq.id).then(n => [eq.id, n]).catch(() => [eq.id, 0])))
         .then(pairs => setParticipantCounts(Object.fromEntries(pairs)))
     }
@@ -338,11 +381,18 @@ export default function Dashboard() {
       const matchesArea = !filterArea || c.area === filterArea
       return matchesSearch && matchesRole && matchesArea
     })
-    .sort((a, b) => (b.id === myColleagueId ? 1 : 0) - (a.id === myColleagueId ? 1 : 0))
+    .sort((a, b) => {
+      const aIsMe = a.id === myColleagueId || (user?.uid && a.uid === user.uid) || (user?.email && a.email?.toLowerCase() === user.email.toLowerCase())
+      const bIsMe = b.id === myColleagueId || (user?.uid && b.uid === user.uid) || (user?.email && b.email?.toLowerCase() === user.email.toLowerCase())
+      return (bIsMe ? 1 : 0) - (aIsMe ? 1 : 0)
+    })
 
   const userInitial = user?.displayName?.charAt(0)?.toUpperCase() || user?.email?.charAt(0)?.toUpperCase() || "?"
   const userName = user?.displayName || user?.email?.split("@")[0] || "Usuario"
   const userFirstName = userName.split(" ")[0]
+
+  const eqHex = hueToHex(parseInt(equipoForm.color) || 295)
+  const eqRgb = hexToRgb(eqHex)
 
   const navItems = [
     ...(isAdmin ? [{ key: "resumen", label: "Resumen", icon: Home }] : []),
@@ -503,11 +553,21 @@ export default function Dashboard() {
 
             {/* Page breadcrumb */}
             <div className="hidden lg:flex items-center gap-2">
-              <span className="text-[12px] text-muted-foreground">Workboard</span>
+              {isSuperAdmin ? (
+                <button onClick={() => navigate("/overview")}
+                  className="text-[12px] text-muted-foreground hover:text-foreground transition-colors">
+                  Workboard
+                </button>
+              ) : (
+                <span className="text-[12px] text-muted-foreground">Workboard</span>
+              )}
               {semillero?.nombre && (
                 <>
                   <span className="text-[12px] text-muted-foreground">/</span>
-                  <span className="text-[12px] text-muted-foreground">{semillero.nombre}</span>
+                  <button onClick={() => setTab("resumen")}
+                    className="text-[12px] text-muted-foreground hover:text-foreground transition-colors">
+                    {semillero.nombre}
+                  </button>
                 </>
               )}
               <span className="text-[12px] text-muted-foreground">/</span>
@@ -822,6 +882,7 @@ export default function Dashboard() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" data-tour="cards">
                     {filtered.map((c) => {
                       const h = c.colorHue ?? hashHue(c.id)
+                      const h2 = c.colorHue2 ?? null
                       const projectCount = c.proyectos?.length || 0
                       const isSelected = selectedIds.has(c.id)
                       return (
@@ -858,7 +919,7 @@ export default function Dashboard() {
 
                           {/* Top stripe */}
                           <div className="h-[3px] w-full flex-shrink-0 rounded-tl-2xl rounded-tr-2xl"
-                            style={{ background: `linear-gradient(90deg, oklch(0.62 0.18 ${h}), oklch(0.55 0.18 ${(h + 40) % 360} / 0.4))` }} />
+                            style={{ background: `linear-gradient(90deg, oklch(0.62 0.18 ${h}), oklch(0.55 0.18 ${h2 ?? (h + 40) % 360} / 0.4))` }} />
 
                           <div className="flex-1 p-5 space-y-3.5 relative">
 
@@ -927,7 +988,7 @@ export default function Dashboard() {
                             <div className="flex items-start gap-3">
                               <WorkloadRing count={projectCount} size={52}>
                                 <div className="w-full h-full flex items-center justify-center text-white font-bold text-[15px] overflow-hidden"
-                                  style={c.avatarUrl ? { background: "var(--muted)" } : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))` }}>
+                                  style={c.avatarUrl ? { background: "var(--muted)" } : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${h2 ?? (h + 40) % 360}))` }}>
                                   {c.avatarUrl
                                     ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
                                     : c.avatarEmoji
@@ -1022,6 +1083,7 @@ export default function Dashboard() {
                   <div className="space-y-1.5" data-tour="cards">
                     {filtered.map((c) => {
                       const h = c.colorHue ?? hashHue(c.id)
+                      const h2 = c.colorHue2 ?? null
                       const projectCount = c.proyectos?.length || 0
                       return (
                         <a key={c.id} href={`/semillero/${semilleroId}/colleague/${c.id}`}
@@ -1029,7 +1091,7 @@ export default function Dashboard() {
                           style={{ borderLeft: `3px solid oklch(0.62 0.18 ${h})` }}>
                           <WorkloadRing count={projectCount} size={44}>
                             <div className="w-full h-full flex items-center justify-center text-white font-bold text-[13px] overflow-hidden"
-                              style={c.avatarUrl ? { background: "var(--muted)" } : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${(h + 40) % 360}))` }}>
+                              style={c.avatarUrl ? { background: "var(--muted)" } : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${h2 ?? (h + 40) % 360}))` }}>
                               {c.avatarUrl
                                 ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
                                 : c.avatarEmoji
@@ -1097,13 +1159,53 @@ export default function Dashboard() {
                         onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
                         className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-[12px] text-muted-foreground">Color:</p>
-                      {["295", "27", "145", "55", "316", "180"].map(hue => (
-                        <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
-                          className="w-5 h-5 rounded-full transition-transform hover:scale-110"
-                          style={{ background: `oklch(0.62 0.22 ${hue})`, outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none", outlineOffset: 2 }} />
-                      ))}
+                    <div className="space-y-2">
+                      <p className="text-[12px] text-muted-foreground mb-1">Color:</p>
+                      <div className="flex items-center gap-2">
+                        <label className="flex-shrink-0 relative w-8 h-8 rounded-xl border border-border overflow-hidden cursor-pointer hover:scale-105 transition-transform block"
+                          style={{ background: eqHex }}>
+                          <input type="color" value={eqHex}
+                            onChange={e => setEquipoForm(f => ({ ...f, color: hexToHue(e.target.value) }))}
+                            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0 }} />
+                        </label>
+                        <div className="flex items-center gap-1 bg-muted/50 border border-border/60 rounded-lg px-2.5 py-1.5 flex-1">
+                          <span className="text-[12px] font-mono text-muted-foreground">#</span>
+                          <input type="text"
+                            value={editingEquipoHex !== null ? editingEquipoHex : eqHex.slice(1).toUpperCase()}
+                            onFocus={() => setEditingEquipoHex(eqHex.slice(1).toUpperCase())}
+                            onChange={e => {
+                              const raw = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6).toUpperCase()
+                              setEditingEquipoHex(raw)
+                              if (raw.length === 6) setEquipoForm(f => ({ ...f, color: hexToHue("#" + raw) }))
+                            }}
+                            onBlur={() => setEditingEquipoHex(null)}
+                            maxLength={6} placeholder="RRGGBB"
+                            className="w-full text-[12px] font-mono bg-transparent text-foreground outline-none" />
+                        </div>
+                        <span className="text-[10px] font-mono text-muted-foreground flex-shrink-0">{equipoForm.color}°</span>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {[["R", "r"], ["G", "g"], ["B", "b"]].map(([lbl, ch]) => (
+                          <div key={ch} className="flex-1 flex items-center gap-1.5 bg-muted/50 border border-border/60 rounded-lg px-2 py-1">
+                            <span className="text-[10px] font-bold text-muted-foreground">{lbl}</span>
+                            <input type="number" min="0" max="255" value={eqRgb[ch]}
+                              onChange={e => {
+                                const upd = { ...eqRgb, [ch]: Math.max(0, Math.min(255, Number(e.target.value) || 0)) }
+                                setEquipoForm(f => ({ ...f, color: hexToHue(rgbToHex(upd.r, upd.g, upd.b)) }))
+                              }}
+                              className="w-full text-[11px] font-mono bg-transparent text-foreground outline-none" />
+                          </div>
+                        ))}
+                      </div>
+                      <div>
+                        <div className="h-1.5 rounded-full overflow-hidden mb-1"
+                          style={{ background: "linear-gradient(to right,oklch(0.62 0.20 0),oklch(0.62 0.20 60),oklch(0.62 0.20 120),oklch(0.62 0.20 180),oklch(0.62 0.20 240),oklch(0.62 0.20 300),oklch(0.62 0.20 360))" }} />
+                        <style>{`.eq-c::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;border:2px solid white;box-shadow:0 1px 3px oklch(0 0 0/30%);background:oklch(0.62 0.22 ${equipoForm.color});cursor:pointer}`}</style>
+                        <input type="range" min="0" max="359" step="1"
+                          className="eq-c w-full h-1.5 rounded-full appearance-none bg-transparent cursor-pointer"
+                          value={parseInt(equipoForm.color) || 295}
+                          onChange={e => setEquipoForm(f => ({ ...f, color: String(e.target.value) }))} />
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
@@ -1119,13 +1221,15 @@ export default function Dashboard() {
                     style={{ borderLeft: `3px solid oklch(0.62 0.22 ${equipoForm.color || "295"})` }}>
                     <div className="flex items-center justify-between">
                       <p className="text-[13px] font-semibold text-foreground">Editando: {editingEquipo.nombre}</p>
-                      <button
-                        onClick={() => { importingEquipoIdRef.current = editingEquipo.id; setImportingEquipoId(editingEquipo.id); setImportPreview(null); setImportError(""); contactsInputRef.current?.click() }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all hover:brightness-110 active:scale-95"
-                        style={{ background: `oklch(0.62 0.20 ${equipoForm.color || "295"})`, color: "#fff", boxShadow: `0 2px 8px oklch(0.52 0.20 ${equipoForm.color || "295"} / 35%)` }}>
-                        <Upload size={12} />
-                        Importar participantes
-                      </button>
+                      {isAdmin && (
+                        <button
+                          onClick={() => { importingEquipoIdRef.current = editingEquipo.id; setImportingEquipoId(editingEquipo.id); setImportPreview(null); setImportError(""); contactsInputRef.current?.click() }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all hover:brightness-110 active:scale-95"
+                          style={{ background: `oklch(0.62 0.20 ${equipoForm.color || "295"})`, color: "#fff", boxShadow: `0 2px 8px oklch(0.52 0.20 ${equipoForm.color || "295"} / 35%)` }}>
+                          <Upload size={12} />
+                          Importar participantes
+                        </button>
+                      )}
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <input placeholder="Nombre *" value={equipoForm.nombre}
@@ -1135,13 +1239,52 @@ export default function Dashboard() {
                         onChange={e => setEquipoForm(f => ({ ...f, descripcion: e.target.value }))}
                         className="bg-muted/50 border border-border rounded-xl px-4 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40" />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-[12px] text-muted-foreground">Color:</p>
-                      {["295", "27", "145", "55", "316", "180"].map(hue => (
-                        <button key={hue} onClick={() => setEquipoForm(f => ({ ...f, color: hue }))}
-                          className="w-5 h-5 rounded-full transition-transform hover:scale-110"
-                          style={{ background: `oklch(0.62 0.22 ${hue})`, outline: equipoForm.color === hue ? `2px solid oklch(0.62 0.22 ${hue})` : "none", outlineOffset: 2 }} />
-                      ))}
+                    <div className="space-y-2">
+                      <p className="text-[12px] text-muted-foreground mb-1">Color:</p>
+                      <div className="flex items-center gap-2">
+                        <label className="flex-shrink-0 relative w-8 h-8 rounded-xl border border-border overflow-hidden cursor-pointer hover:scale-105 transition-transform block"
+                          style={{ background: eqHex }}>
+                          <input type="color" value={eqHex}
+                            onChange={e => setEquipoForm(f => ({ ...f, color: hexToHue(e.target.value) }))}
+                            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0 }} />
+                        </label>
+                        <div className="flex items-center gap-1 bg-muted/50 border border-border/60 rounded-lg px-2.5 py-1.5 flex-1">
+                          <span className="text-[12px] font-mono text-muted-foreground">#</span>
+                          <input type="text"
+                            value={editingEquipoHex !== null ? editingEquipoHex : eqHex.slice(1).toUpperCase()}
+                            onFocus={() => setEditingEquipoHex(eqHex.slice(1).toUpperCase())}
+                            onChange={e => {
+                              const raw = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6).toUpperCase()
+                              setEditingEquipoHex(raw)
+                              if (raw.length === 6) setEquipoForm(f => ({ ...f, color: hexToHue("#" + raw) }))
+                            }}
+                            onBlur={() => setEditingEquipoHex(null)}
+                            maxLength={6} placeholder="RRGGBB"
+                            className="w-full text-[12px] font-mono bg-transparent text-foreground outline-none" />
+                        </div>
+                        <span className="text-[10px] font-mono text-muted-foreground flex-shrink-0">{equipoForm.color}°</span>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {[["R", "r"], ["G", "g"], ["B", "b"]].map(([lbl, ch]) => (
+                          <div key={ch} className="flex-1 flex items-center gap-1.5 bg-muted/50 border border-border/60 rounded-lg px-2 py-1">
+                            <span className="text-[10px] font-bold text-muted-foreground">{lbl}</span>
+                            <input type="number" min="0" max="255" value={eqRgb[ch]}
+                              onChange={e => {
+                                const upd = { ...eqRgb, [ch]: Math.max(0, Math.min(255, Number(e.target.value) || 0)) }
+                                setEquipoForm(f => ({ ...f, color: hexToHue(rgbToHex(upd.r, upd.g, upd.b)) }))
+                              }}
+                              className="w-full text-[11px] font-mono bg-transparent text-foreground outline-none" />
+                          </div>
+                        ))}
+                      </div>
+                      <div>
+                        <div className="h-1.5 rounded-full overflow-hidden mb-1"
+                          style={{ background: "linear-gradient(to right,oklch(0.62 0.20 0),oklch(0.62 0.20 60),oklch(0.62 0.20 120),oklch(0.62 0.20 180),oklch(0.62 0.20 240),oklch(0.62 0.20 300),oklch(0.62 0.20 360))" }} />
+                        <input type="range" min="0" max="359" step="1"
+                          className="eq-c w-full h-1.5 rounded-full appearance-none bg-transparent cursor-pointer"
+                          value={parseInt(equipoForm.color) || 295}
+                          onChange={e => setEquipoForm(f => ({ ...f, color: String(e.target.value) }))} />
+                      </div>
                     </div>
                     {(() => {
                       const liveEquipo = equipos.find(e => e.id === editingEquipo.id) || editingEquipo
@@ -1192,14 +1335,16 @@ export default function Dashboard() {
                         </div>
                       )
                     })()}
-                    <div className="flex items-center gap-2 pt-1">
-                      <input type="checkbox" id="esPrueba" checked={!!equipoForm.esPrueba}
-                        onChange={e => setEquipoForm(f => ({ ...f, esPrueba: e.target.checked }))}
-                        className="w-4 h-4 accent-amber-500" />
-                      <label htmlFor="esPrueba" className="text-[12px] text-muted-foreground cursor-pointer select-none">
-                        Grupo de prueba — <span className="text-amber-500 font-medium">no enviar notificaciones de WhatsApp</span>
-                      </label>
-                    </div>
+                    {isAdmin && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <input type="checkbox" id="esPrueba" checked={!!equipoForm.esPrueba}
+                          onChange={e => setEquipoForm(f => ({ ...f, esPrueba: e.target.checked }))}
+                          className="w-4 h-4 accent-amber-500" />
+                        <label htmlFor="esPrueba" className="text-[12px] text-muted-foreground cursor-pointer select-none">
+                          Grupo de prueba — <span className="text-amber-500 font-medium">no enviar notificaciones de WhatsApp</span>
+                        </label>
+                      </div>
+                    )}
                     <div className="flex gap-2 pt-1 border-t border-border">
                       <Button size="sm" onClick={handleSaveEquipo} disabled={savingEquipo}>
                         {savingEquipo ? "Guardando…" : "Guardar cambios"}
@@ -1226,6 +1371,8 @@ export default function Dashboard() {
                         const eqColor = eq.color || "295"
                         const miembros = (eq.miembros || []).map(cid => colleagues.find(c => c.id === cid)).filter(Boolean)
                         const isActive = editingEquipo?.id === eq.id
+                        const isMemberOfGroup = myColleagueId && (eq.miembros || []).includes(myColleagueId)
+                        const canEditGroup = isAdmin || isMemberOfGroup
                         return (
                           <div key={eq.id}
                             className="relative rounded-2xl overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
@@ -1248,7 +1395,7 @@ export default function Dashboard() {
                                     <p className="text-[12px] text-muted-foreground ml-4 truncate">{eq.descripcion}</p>
                                   )}
                                 </div>
-                                {isAdmin && (
+                                {canEditGroup && (
                                   <div className="flex gap-2 ml-2 flex-shrink-0">
                                     <button onClick={e => { e.stopPropagation(); setEditingEquipo(eq); setEquipoForm({ nombre: eq.nombre, descripcion: eq.descripcion || "", color: eq.color || "295", esPrueba: !!eq.esPrueba }); setShowEquipoForm(false) }}
                                       className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
@@ -1266,10 +1413,11 @@ export default function Dashboard() {
                                   <div className="flex -space-x-2">
                                     {miembros.slice(0, 5).map(c => {
                                       const ch = c.colorHue ?? hashHue(c.id)
+                                      const ch2 = c.colorHue2 ?? null
                                       return (
                                         <div key={c.id}
                                           className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 ring-card flex-shrink-0 overflow-hidden"
-                                          style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch + 40) % 360}))` }}
+                                          style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${ch2 ?? (ch + 40) % 360}))` }}
                                           title={c.nombre}>
                                           {c.avatarUrl
                                             ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />

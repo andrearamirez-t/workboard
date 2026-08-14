@@ -1,12 +1,13 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth"
-import { doc, getDoc, collection, getDocs, updateDoc, arrayUnion, query, where } from "firebase/firestore"
+import { doc, getDoc, collection, getDocs, updateDoc, arrayUnion } from "firebase/firestore"
 import { auth, googleProvider, db } from "@/services/firebase"
 import { getColleagueByEmail, linkColleagueUid } from "@/services/colleagues.service"
+import { ensureUsuarioDoc } from "@/services/usuarios.service"
 
-const SUPER_ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
+// Superadmins fijos — fuente de verdad para el nivel más alto
+export const SUPER_ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
-// Agrega el uid del usuario a memberUids en todos los grupos donde ya aparece en miembros
 async function backfillMemberUids(companionId, uid) {
   try {
     const snap = await getDocs(collection(db, "equipos"))
@@ -26,7 +27,6 @@ async function backfillMemberUids(companionId, uid) {
 }
 
 const AuthContext = createContext(null)
-
 const cacheKey = (email) => `wb_cid_${email}`
 
 export function AuthProvider({ children }) {
@@ -35,87 +35,93 @@ export function AuthProvider({ children }) {
   const [authError, setAuthError] = useState(null)
   const [myColleagueId, setMyColleagueId] = useState(null)
   const [mySemilleroId, setMySemilleroId] = useState(null)
-  const [isCoordinador, setIsCoordinador] = useState(false)
+  const [role, setRole] = useState(null) // "superadmin" | "admin" | "member"
+
+  // Derived flags
+  const isSuperAdmin = role === "superadmin"
+  const isAdmin = role === "admin" || role === "superadmin"
+  const isCoordinador = isAdmin // alias para retrocompatibilidad
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      // Dominio no permitido
       if (currentUser && !currentUser.email?.endsWith("@cun.edu.co")) {
         await signOut(auth)
         setAuthError("Solo cuentas @cun.edu.co tienen acceso a Workboard.")
-        setUser(null)
-        setMyColleagueId(null)
-      } else if (currentUser) {
-        setAuthError(null)
-        setUser(currentUser)
-        try {
-          // 1. Revisar caché local primero (usa getDoc directo, siempre permitido)
-          const cached = localStorage.getItem(cacheKey(currentUser.email))
-          if (cached) {
-            const snap = await getDoc(doc(db, "companeros", cached))
-            if (snap.exists()) {
-              setMyColleagueId(cached)
-              setLoading(false)
-              if (!snap.data()?.uid) {
-                linkColleagueUid(cached, currentUser.uid).catch(() => {})
-                backfillMemberUids(cached, currentUser.uid).catch(() => {})
-              }
-              return
-            }
-            // Caché inválido (doc eliminado), limpiar
-            localStorage.removeItem(cacheKey(currentUser.email))
-          }
+        setUser(null); setMyColleagueId(null); setRole(null)
+        setLoading(false)
+        return
+      }
 
-          // 2. Query por email (requiere allow read/list en reglas Firestore)
-          const companion = await getColleagueByEmail(currentUser.email)
-          if (companion) {
-            setMyColleagueId(companion.id)
-            localStorage.setItem(cacheKey(currentUser.email), companion.id)
-            if (!companion.uid) {
-              await linkColleagueUid(companion.id, currentUser.uid)
-              backfillMemberUids(companion.id, currentUser.uid).catch(() => {})
+      // Sin sesión
+      if (!currentUser) {
+        setAuthError(null); setUser(null); setMyColleagueId(null)
+        setMySemilleroId(null); setRole(null)
+        setLoading(false)
+        return
+      }
+
+      setAuthError(null)
+      setUser(currentUser)
+
+      const isSA = SUPER_ADMIN_EMAILS.includes(currentUser.email)
+
+      try {
+        if (!isSA) {
+          // Leer / crear doc en usuarios/{uid}
+          const userData = await ensureUsuarioDoc(currentUser.uid, {
+            email: currentUser.email,
+            nombre: currentUser.displayName || "",
+          })
+          setRole(userData.role || "member")
+          if (userData.semilleroId) setMySemilleroId(userData.semilleroId)
+        } else {
+          setRole("superadmin")
+        }
+
+        // Vincular perfil de compañero (todos los roles)
+        const cached = localStorage.getItem(cacheKey(currentUser.email))
+        if (cached) {
+          const snap = await getDoc(doc(db, "companeros", cached))
+          if (snap.exists()) {
+            setMyColleagueId(cached)
+            if (!snap.data()?.uid) {
+              linkColleagueUid(cached, currentUser.uid).catch(() => {})
+              backfillMemberUids(cached, currentUser.uid).catch(() => {})
             }
-          } else {
-            setMyColleagueId(null)
+            // Completar semilleroId si no vino del doc de usuario
+            if (!isSA && snap.data().semilleroId) {
+              setMySemilleroId(prev => prev || snap.data().semilleroId)
+            }
+            setLoading(false)
+            return
           }
-        } catch (e) {
-          console.error("[Workboard] Error vinculando perfil:", e.code, e.message)
+          localStorage.removeItem(cacheKey(currentUser.email))
+        }
+
+        const companion = await getColleagueByEmail(currentUser.email)
+        if (companion) {
+          setMyColleagueId(companion.id)
+          localStorage.setItem(cacheKey(currentUser.email), companion.id)
+          if (!companion.uid) {
+            await linkColleagueUid(companion.id, currentUser.uid)
+            backfillMemberUids(companion.id, currentUser.uid).catch(() => {})
+          }
+          if (!isSA && companion.semilleroId) {
+            setMySemilleroId(prev => prev || companion.semilleroId)
+          }
+        } else {
           setMyColleagueId(null)
         }
-      } else {
-        setAuthError(null)
-        setUser(null)
-        setMyColleagueId(null)
-        setMySemilleroId(null)
-        setIsCoordinador(false)
+      } catch (e) {
+        console.error("[Workboard] Error cargando usuario:", e.code, e.message)
+        setRole(isSA ? "superadmin" : "member")
       }
+
       setLoading(false)
     })
     return unsubscribe
   }, [])
-
-  // Resolve semillero & coordinator role once auth + myColleagueId are ready
-  useEffect(() => {
-    if (!user) return
-    if (SUPER_ADMIN_EMAILS.includes(user.email)) return // super-admins don't need a fixed semilleroId
-    let cancelled = false
-    ;(async () => {
-      try {
-        const q = query(collection(db, "semilleros"), where("coordinadores", "array-contains", user.uid))
-        const snap = await getDocs(q)
-        if (cancelled) return
-        if (!snap.empty) {
-          setIsCoordinador(true)
-          setMySemilleroId(snap.docs[0].id)
-          return
-        }
-        if (myColleagueId) {
-          const cSnap = await getDoc(doc(db, "companeros", myColleagueId))
-          if (!cancelled && cSnap.exists()) setMySemilleroId(cSnap.data().semilleroId || null)
-        }
-      } catch {}
-    })()
-    return () => { cancelled = true }
-  }, [user, myColleagueId])
 
   const loginWithGoogle = async () => {
     try {
@@ -129,7 +135,11 @@ export function AuthProvider({ children }) {
   const logout = () => signOut(auth)
 
   return (
-    <AuthContext.Provider value={{ user, loading, loginWithGoogle, logout, authError, myColleagueId, mySemilleroId, isCoordinador }}>
+    <AuthContext.Provider value={{
+      user, loading, loginWithGoogle, logout, authError,
+      myColleagueId, mySemilleroId,
+      role, isSuperAdmin, isAdmin, isCoordinador,
+    }}>
       {children}
     </AuthContext.Provider>
   )

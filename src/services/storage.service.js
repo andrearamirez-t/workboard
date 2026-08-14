@@ -138,6 +138,32 @@ export const deleteTaskFile = async (storagePath) => {
   await deleteObject(ref(storage, storagePath))
 }
 
+// ── Archivos de perfil profesional (HV, portafolio, PDA) ─────────────────────
+export const uploadPerfilFile = (colleagueId, tipo, file, { onProgress } = {}) => {
+  return new Promise((resolve, reject) => {
+    const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`
+    const storagePath = `perfiles/${colleagueId}/${tipo}/${safeName}`
+    const storageRef = ref(storage, storagePath)
+    const task = uploadBytesResumable(storageRef, file)
+    task.on(
+      "state_changed",
+      snap => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+      reject,
+      async () => {
+        try {
+          const url = await getDownloadURL(task.snapshot.ref)
+          resolve({ url, nombre: file.name, size: file.size, storagePath })
+        } catch (err) { reject(err) }
+      }
+    )
+  })
+}
+
+export const deletePerfilFile = async (storagePath) => {
+  if (!storagePath) return
+  await deleteObject(ref(storage, storagePath))
+}
+
 // ── Archivos adjuntos a tareas de grupo ──────────────────────────────────────
 export const uploadGrupoTaskFile = (grupoId, taskId, file, { onProgress } = {}) => {
   return new Promise((resolve, reject) => {

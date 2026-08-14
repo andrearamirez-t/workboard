@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo, useRef } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { getSemilleros } from "@/services/semilleros.service"
@@ -14,8 +14,8 @@ import {
   Home, TrendingUp, BarChart2, Menu, Settings,
   ChevronRight, ChevronDown, Activity
 } from "lucide-react"
+import GestionarUsuarios from "@/pages/GestionarUsuarios"
 
-const SUPER_ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
 function StatCard({ label, value, sub, hue = "165" }) {
   return (
@@ -29,8 +29,7 @@ function StatCard({ label, value, sub, hue = "165" }) {
 
 export default function GlobalDashboard() {
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
-  const isSuperAdmin = SUPER_ADMIN_EMAILS.includes(user?.email)
+  const { user, logout, isSuperAdmin, isAdmin, mySemilleroId } = useAuth()
 
   const [semilleros, setSemilleros] = useState([])
   const [colleagues, setColleagues] = useState([])
@@ -39,9 +38,29 @@ export default function GlobalDashboard() {
   const [tab, setTab] = useState("resumen")
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [expandedLogId, setExpandedLogId] = useState(null)
+  const [logFilter,  setLogFilter]  = useState(null)
+  const [logSearch,  setLogSearch]  = useState("")
+  const [filterOpen, setFilterOpen] = useState(false)
+  const filterRef = useRef(null)
+
+  const getThisWeekRange = () => {
+    const now = new Date()
+    const day = now.getDay()
+    const diffMon = day === 0 ? -6 : 1 - day
+    const mon = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffMon)
+    const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6)
+    return {
+      from: mon.toISOString().split("T")[0],
+      to:   sun.toISOString().split("T")[0],
+    }
+  }
+  const [dateFrom, setDateFrom] = useState(() => getThisWeekRange().from)
+  const [dateTo,   setDateTo]   = useState(() => getThisWeekRange().to)
 
   useEffect(() => {
-    if (!isSuperAdmin) { navigate("/semilleros", { replace: true }); return }
+    if (!isAdmin) { navigate("/semilleros", { replace: true }); return }
+    // Los admins (no superadmin) van directo a la pestaña de usuarios
+    if (!isSuperAdmin) setTab("usuarios")
     Promise.all([getSemilleros(), getColleagues(), getAllLogs()])
       .then(([sems, cols, ls]) => {
         setSemilleros(sems)
@@ -51,6 +70,13 @@ export default function GlobalDashboard() {
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [isSuperAdmin, navigate])
+
+  // Cerrar dropdown al hacer clic fuera
+  useEffect(() => {
+    const handler = e => { if (filterRef.current && !filterRef.current.contains(e.target)) setFilterOpen(false) }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
 
   // Stats globales
   const semStats = semilleros.map(s => {
@@ -69,9 +95,40 @@ export default function GlobalDashboard() {
   const userInitial = user?.displayName?.charAt(0)?.toUpperCase() || user?.email?.charAt(0)?.toUpperCase() || "?"
   const userFirstName = (user?.displayName || user?.email?.split("@")[0] || "Usuario").split(" ")[0]
 
+  const weekLogs = useMemo(() => {
+    const toDate = ts => ts?.toDate?.() || (ts?.seconds ? new Date(ts.seconds * 1000) : null)
+    const start = dateFrom ? new Date(dateFrom + "T00:00:00") : null
+    const end   = dateTo   ? new Date(dateTo   + "T23:59:59") : null
+    return logs
+      .filter(log => {
+        const d = toDate(log.createdAt)
+        if (!d) return false
+        if (start && d < start) return false
+        if (end   && d > end)   return false
+        if (logFilter && log.semilleroId !== logFilter) return false
+        if (logSearch) {
+          const q = logSearch.toLowerCase()
+          const semNombre = semilleros.find(s => s.id === log.semilleroId)?.nombre?.toLowerCase() || ""
+          const matchName = log.colleagueName?.toLowerCase().includes(q)
+          const matchSem  = semNombre.includes(q)
+          const matchNota = log.nota?.toLowerCase().includes(q)
+          if (!matchName && !matchSem && !matchNota) return false
+        }
+        return true
+      })
+      .sort((a, b) => {
+        const da = toDate(a.createdAt) || 0
+        const db = toDate(b.createdAt) || 0
+        return db - da
+      })
+  }, [logs, dateFrom, dateTo, logFilter, logSearch, semilleros])
+
   const navItems = [
-    { key: "resumen",  label: "Resumen",  icon: Home },
-    { key: "analisis", label: "Análisis", icon: TrendingUp },
+    ...(isSuperAdmin ? [
+      { key: "resumen",  label: "Resumen",  icon: Home },
+      { key: "analisis", label: "Análisis", icon: TrendingUp },
+    ] : []),
+    { key: "usuarios", label: "Usuarios", icon: Settings },
   ]
 
   // ── SIDEBAR ──────────────────────────────────────────────────────────────
@@ -143,42 +200,21 @@ export default function GlobalDashboard() {
           )
         })}
 
-        {/* Separador equipos */}
+        {/* Coordinaciones */}
         <div className="pt-3 pb-1">
           <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest px-3">
-            Equipos
+            Coordinaciones
           </p>
         </div>
-
-        {semilleros.map(s => {
-          const h = s.color || "165"
-          return (
-            <button key={s.id}
-              onClick={() => { navigate(`/semillero/${s.id}/dashboard`); setSidebarOpen(false) }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-all text-left group"
-              style={{ color: "var(--muted-foreground)" }}
-              onMouseEnter={e => { e.currentTarget.style.background = "var(--muted)"; e.currentTarget.style.color = "var(--foreground)" }}
-              onMouseLeave={e => { e.currentTarget.style.background = ""; e.currentTarget.style.color = "var(--muted-foreground)" }}>
-              <div className="w-5 h-5 rounded-md flex-shrink-0"
-                style={{ background: `oklch(0.62 0.18 ${h} / 0.20)`, border: `1.5px solid oklch(0.62 0.18 ${h} / 0.40)` }} />
-              <span className="truncate flex-1">{s.nombre}</span>
-              <ChevronRight size={12} className="flex-shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" />
-            </button>
-          )
-        })}
-
-        {/* Gestionar equipos */}
-        <div className="pt-2">
-          <button
-            onClick={() => { navigate("/semilleros?manage=true"); setSidebarOpen(false) }}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-all text-left"
-            style={{ color: "var(--muted-foreground)" }}
-            onMouseEnter={e => e.currentTarget.style.background = "var(--muted)"}
-            onMouseLeave={e => e.currentTarget.style.background = ""}>
-            <Settings size={13} className="flex-shrink-0" />
-            Gestionar equipos
-          </button>
-        </div>
+        <button
+          onClick={() => { navigate("/semilleros?manage=true"); setSidebarOpen(false) }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-all text-left"
+          style={{ color: "var(--muted-foreground)" }}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--muted)"}
+          onMouseLeave={e => e.currentTarget.style.background = ""}>
+          <Settings size={13} className="flex-shrink-0" />
+          Gestionar coordinaciones
+        </button>
       </nav>
 
       <div className="mx-4 h-px bg-border/70 flex-shrink-0" />
@@ -225,14 +261,19 @@ export default function GlobalDashboard() {
               <span className="text-[12px] text-muted-foreground">Workboard</span>
               <span className="text-[12px] text-muted-foreground">/</span>
               <span className="text-[13px] font-semibold text-foreground">
-                {tab === "resumen" ? "Resumen global" : "Análisis global"}
+                {tab === "resumen" ? "Resumen global" : tab === "analisis" ? "Análisis global" : "Gestionar usuarios"}
               </span>
             </div>
             <span className="lg:hidden text-[14px] font-semibold text-foreground">
-              {tab === "resumen" ? "Resumen global" : "Análisis global"}
+              {tab === "resumen" ? "Resumen global" : tab === "analisis" ? "Análisis global" : "Gestionar usuarios"}
             </span>
             <div className="ml-auto flex items-center gap-2">
-              <NotificationBell isAdmin={true} userEmail={user?.email} userUid={user?.uid} />
+              <NotificationBell
+                isAdmin={true}
+                userEmail={user?.email}
+                userUid={user?.uid}
+                semilleroId={isSuperAdmin ? undefined : mySemilleroId}
+              />
               <ThemeToggle />
             </div>
           </header>
@@ -324,18 +365,106 @@ export default function GlobalDashboard() {
                   </div>
                 </section>
 
-                {/* Actividad reciente */}
-                {logs.length > 0 && (
-                  <section>
-                    <div className="flex items-center justify-between mb-4">
-                      <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">
-                        Actividad reciente · todos los equipos
-                      </p>
-                      <span className="text-[11px] text-muted-foreground">{logs.length} notas</span>
+                {/* Actividad semanal */}
+                <section>
+                  {/* Fila 1: título + contador + selector de fechas */}
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">
+                      Actividad semanal
+                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] text-muted-foreground tabular-nums">
+                        {weekLogs.length} nota{weekLogs.length !== 1 ? "s" : ""}
+                      </span>
+                      <div className="flex items-center rounded-xl border border-border overflow-hidden text-[12px]"
+                        style={{ background: "var(--card)" }}>
+                        <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-r border-border">
+                          <span className="text-[10px] font-semibold text-muted-foreground select-none">Desde</span>
+                          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                            className="bg-transparent text-[12px] text-foreground focus:outline-none cursor-pointer"
+                            style={{ colorScheme: "dark light" }} />
+                        </div>
+                        <div className="flex items-center gap-1.5 px-2.5 py-1.5">
+                          <span className="text-[10px] font-semibold text-muted-foreground select-none">Hasta</span>
+                          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                            className="bg-transparent text-[12px] text-foreground focus:outline-none cursor-pointer"
+                            style={{ colorScheme: "dark light" }} />
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => { const r = getThisWeekRange(); setDateFrom(r.from); setDateTo(r.to) }}
+                        className="px-2.5 py-1.5 rounded-xl border border-border text-[11px] font-medium hover:bg-muted transition-colors"
+                        style={{ color: "var(--muted-foreground)" }}>
+                        Esta semana
+                      </button>
                     </div>
-                    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                  </div>
+
+                  {/* Fila 2: búsqueda */}
+                  <div className="relative mb-3">
+                    <svg className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                    </svg>
+                    <input type="text" value={logSearch} onChange={e => setLogSearch(e.target.value)}
+                      placeholder="Buscar por persona, equipo o actividad…"
+                      className="w-full pl-8 pr-4 py-2 rounded-xl border border-border bg-card text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none" />
+                    {logSearch && (
+                      <button onClick={() => setLogSearch("")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors text-[14px]">
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Fila 3: filtro por equipo — dropdown */}
+                  <div className="relative mb-4" ref={filterRef}>
+                    <button onClick={() => setFilterOpen(v => !v)}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-border text-[12px] font-medium hover:bg-muted transition-colors"
+                      style={{ color: logFilter ? "oklch(0.40 0.13 165)" : "var(--muted-foreground)", borderColor: logFilter ? "oklch(0.52 0.13 165 / 0.4)" : "var(--border)" }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/>
+                      </svg>
+                      {logFilter ? semilleros.find(s => s.id === logFilter)?.nombre || "Equipo" : "Todos los equipos"}
+                      <ChevronDown size={12} style={{ transform: filterOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }} />
+                    </button>
+
+                    {filterOpen && (
+                      <div className="absolute left-0 top-[calc(100%+6px)] z-30 bg-card border border-border rounded-2xl shadow-xl overflow-hidden min-w-[200px]">
+                        <button onClick={() => { setLogFilter(null); setFilterOpen(false) }}
+                          className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] hover:bg-muted transition-colors text-left"
+                          style={{ color: !logFilter ? "oklch(0.40 0.13 165)" : "var(--foreground)", fontWeight: !logFilter ? 700 : 400 }}>
+                          {!logFilter && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: "oklch(0.52 0.13 165)" }} />}
+                          {logFilter && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-0" />}
+                          Todos los equipos
+                        </button>
+                        <div className="border-t border-border/50" />
+                        {semilleros.map(s => {
+                          const h = s.color || "165"
+                          const active = logFilter === s.id
+                          return (
+                            <button key={s.id} onClick={() => { setLogFilter(active ? null : s.id); setFilterOpen(false) }}
+                              className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] hover:bg-muted transition-colors text-left"
+                              style={{ color: active ? `oklch(0.45 0.18 ${h})` : "var(--foreground)", fontWeight: active ? 700 : 400 }}>
+                              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                                style={{ background: active ? `oklch(0.62 0.18 ${h})` : "var(--border)" }} />
+                              {s.nombre}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-card border border-border rounded-2xl overflow-hidden">
+                    {weekLogs.length === 0 ? (
+                      <div className="py-10 text-center">
+                        <p className="text-[13px] text-muted-foreground">
+                          Sin actividad registrada en ese período.
+                        </p>
+                      </div>
+                    ) : (
                       <div className="overflow-y-auto overflow-x-hidden" style={{ maxHeight: 440 }}>
-                        {logs.map((log, i) => {
+                        {weekLogs.map((log, i) => {
                           const sem = semilleros.find(s => s.id === log.semilleroId)
                           const h = sem?.color || "165"
                           const isExpanded = expandedLogId === log.id
@@ -343,10 +472,8 @@ export default function GlobalDashboard() {
                           const hasLongNote = (log.nota || "").length > 90
                           return (
                             <div key={log.id}
-                              className={`px-4 py-3 hover:bg-muted/30 transition-colors ${i < logs.length - 1 ? "border-b border-border/50" : ""}`}>
-                              {/* Cabecera: avatar + nombre + equipo + fecha + chevron */}
-                              <div
-                                className="flex items-center gap-3 cursor-pointer"
+                              className={`px-4 py-3 hover:bg-muted/30 transition-colors ${i < weekLogs.length - 1 ? "border-b border-border/50" : ""}`}>
+                              <div className="flex items-center gap-3 cursor-pointer"
                                 onClick={() => setExpandedLogId(isExpanded ? null : log.id)}>
                                 <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0"
                                   style={{ background: `linear-gradient(135deg, oklch(0.62 0.18 ${h}), oklch(0.52 0.18 ${(Number(h) + 40) % 360}))` }}>
@@ -366,23 +493,21 @@ export default function GlobalDashboard() {
                                 <div className="flex items-center gap-1.5 flex-shrink-0">
                                   {logDate && (
                                     <span className="text-[11px] text-muted-foreground whitespace-nowrap hidden sm:block">
-                                      {format(logDate, "d MMM", { locale: es })}
+                                      {format(logDate, "EEEE d MMM · HH:mm", { locale: es })}
                                     </span>
                                   )}
                                   <ChevronDown size={13} className="text-muted-foreground"
                                     style={{ transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }} />
                                 </div>
                               </div>
-                              {/* Nota: siempre debajo, wrapping vertical */}
                               <div className="mt-1.5 pl-10">
                                 <p className="text-[12px] text-muted-foreground break-words leading-relaxed"
                                   style={{ display: "-webkit-box", WebkitLineClamp: isExpanded ? "unset" : 2, WebkitBoxOrient: "vertical", overflow: isExpanded ? "visible" : "hidden" }}>
                                   {log.nota}
                                 </p>
                                 {hasLongNote && (
-                                  <button
-                                    className="text-[11px] font-medium mt-1 transition-colors hover:opacity-70"
-                                    style={{ color: `oklch(0.52 0.13 165)` }}
+                                  <button className="text-[11px] font-medium mt-1 transition-colors hover:opacity-70"
+                                    style={{ color: "oklch(0.52 0.13 165)" }}
                                     onClick={() => setExpandedLogId(isExpanded ? null : log.id)}>
                                     {isExpanded ? "Ver menos" : "Ver más"}
                                   </button>
@@ -392,13 +517,14 @@ export default function GlobalDashboard() {
                           )
                         })}
                       </div>
-                    </div>
-                  </section>
-                )}
+                    )}
+                  </div>
+                </section>
               </>
-            ) : (
-              /* Tab: Análisis — reutiliza MetricsDashboard con todos los datos */
+            ) : tab === "analisis" ? (
               <MetricsDashboard colleagues={colleagues} logs={logs} />
+            ) : (
+              <GestionarUsuarios semilleros={semilleros} />
             )}
           </main>
         </div>

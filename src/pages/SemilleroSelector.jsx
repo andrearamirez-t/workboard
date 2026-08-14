@@ -8,15 +8,13 @@ import { migrateColleaguesToSemillero } from "@/services/colleagues.service"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Plus, Users, Pencil, Trash2, LogOut, ArrowRight, Layers, X, Check, BarChart2 } from "lucide-react"
 
-const SUPER_ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 const HUES = ["165", "295", "230", "40", "10", "180", "316", "260"]
 
 export default function SemilleroSelector() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const isManageMode = searchParams.get("manage") === "true"
-  const { user, logout, mySemilleroId, isCoordinador, loading: authLoading } = useAuth()
-  const isSuperAdmin = SUPER_ADMIN_EMAILS.includes(user?.email)
+  const { user, logout, mySemilleroId, isCoordinador, isSuperAdmin, loading: authLoading } = useAuth()
 
   const [semilleros, setSemilleros] = useState([])
   const [loading, setLoading] = useState(true)

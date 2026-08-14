@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react"
 import { useParams, useNavigate } from "react-router-dom"
-import { useAuth } from "@/context/AuthContext"
+import { useAuth, SUPER_ADMIN_EMAILS } from "@/context/AuthContext"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { Footer } from "@/components/ui/Footer"
 import { Button } from "@/components/ui/button"
@@ -17,10 +17,13 @@ import {
   importGroupContacts, getGroupContacts, deleteGroupContact, deleteAllGroupContacts,
 } from "@/services/groups.service"
 import { parseContactsFile } from "@/utils/parseContactsFile"
+import { extractPdfText, parseCunPdf } from "@/utils/parsePropuesta"
 import { notificarTareaCompletada, crearNotificacionUsuario } from "@/services/notificaciones.service"
 import { getColleagues, addProject } from "@/services/colleagues.service"
 import { uploadGroupDocument, getGroupDocuments, deleteGroupDocument, uploadGrupoTaskFile, deleteTaskFile, MAX_FILE_SIZE } from "@/services/storage.service"
-import { Pencil, Trash2, Check, X, Plus, ChevronDown, ChevronUp } from "lucide-react"
+import { Pencil, Trash2, Check, X, Plus } from "lucide-react"
+import { doc, updateDoc } from "firebase/firestore"
+import { db } from "@/services/firebase"
 import { downloadFile } from "@/utils/download"
 
 function getFileTypeInfo(tipo, nombre) {
@@ -40,7 +43,6 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
 
 const ESTADOS = ["Planificación", "En desarrollo", "En revisión", "Finalizado", "Pausado", "Entregado"]
 const STATE_COLOR = {
@@ -63,8 +65,7 @@ const EMPTY_PROJECT = { nombre: "", estado: "En desarrollo", avance: 0, area: ""
 export default function GroupDetail() {
   const { id, semilleroId } = useParams()
   const navigate = useNavigate()
-  const { user, myColleagueId } = useAuth()
-  const isAdmin = ADMIN_EMAILS.includes(user?.email)
+  const { user, myColleagueId, isAdmin, isSuperAdmin } = useAuth()
 
   const [grupo, setGrupo] = useState(null)
   const [colleagues, setColleagues] = useState([])
@@ -87,6 +88,10 @@ export default function GroupDetail() {
   const [savingProject, setSavingProject] = useState(false)
   const [projectSearch, setProjectSearch] = useState("")
   const [returningProject, setReturningProject] = useState(null)
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [pdfError, setPdfError] = useState(null)
+  const [pdfImported, setPdfImported] = useState(false)
+  const pdfInputRef = useRef(null)
   const [returnTargetId, setReturnTargetId] = useState("")
   const [savingReturn, setSavingReturn] = useState(false)
 
@@ -136,9 +141,10 @@ export default function GroupDetail() {
   const [importSaving, setImportSaving] = useState(false)
   const [contactSearch, setContactSearch] = useState("")
 
-  // Secciones colapsables
-  const [openSections, setOpenSections] = useState({ proyectos: true, bitacora: true, tareas: true, feedback: true, contactos: true })
-  const toggleSection = (s) => setOpenSections(prev => ({ ...prev, [s]: !prev[s] }))
+  // Tabs / sidebar
+  const [activeTab, setActiveTab] = useState("proyectos")
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [showMemberManager, setShowMemberManager] = useState(false)
 
   const [loadingData, setLoadingData] = useState(true)
 
@@ -317,6 +323,39 @@ export default function GroupDetail() {
     } finally { setSavingProject(false) }
   }
 
+  const handlePdfImport = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    setPdfLoading(true)
+    setPdfError(null)
+    setPdfImported(false)
+    try {
+      const rawText = await extractPdfText(file)
+      const fields = parseCunPdf(rawText)
+      if (Object.keys(fields).length === 0) {
+        setPdfError("No se reconoció el formato. Verifica que sea un PDF del Asistente CUN.")
+        return
+      }
+      setProjectForm(prev => ({
+        ...prev,
+        ...(fields.nombre        && { nombre: fields.nombre }),
+        ...(fields.area          && { area: fields.area }),
+        ...(fields.queHace       && { queHace: fields.queHace }),
+        ...(fields.herramientas  && { herramientas: fields.herramientas }),
+        ...(fields.observaciones && { observaciones: fields.observaciones }),
+        ...(fields.fechaInicio   && { fechaInicio: fields.fechaInicio }),
+        ...(fields.fechaEntrega  && { fechaEntrega: fields.fechaEntrega }),
+      }))
+      setPdfImported(true)
+    } catch (err) {
+      console.error("[Workboard] Error parseando PDF:", err)
+      setPdfError("No se pudo leer el archivo. Asegúrate de que sea un PDF válido.")
+    } finally {
+      setPdfLoading(false)
+    }
+  }
+
   const handleDeleteProject = async (proyecto) => {
     await deleteGrupoProject(id, proyecto)
     setGrupo(prev => ({ ...prev, proyectos: (prev.proyectos || []).filter(p => p !== proyecto) }))
@@ -376,7 +415,7 @@ export default function GroupDetail() {
   const notificarMiembros = ({ tipo, titulo, subtitulo, path: p }) => {
     const memberColleagues = colleagues.filter(c => (grupo?.miembros || []).includes(c.id))
     memberColleagues.forEach(c => {
-      if (!c.uid || ADMIN_EMAILS.includes(c.email)) return
+      if (!c.uid || SUPER_ADMIN_EMAILS.includes(c.email)) return
       crearNotificacionUsuario({ toUid: c.uid, tipo, titulo, subtitulo, path: p, semilleroId }).catch(() => {})
     })
   }
@@ -591,6 +630,19 @@ export default function GroupDetail() {
     setEditingFbId(null)
   }
 
+  const handleToggleMember = async (colleagueId) => {
+    const miembrosActuales = grupo.miembros || []
+    const c = colleagues.find(col => col.id === colleagueId)
+    const memberUids = grupo.memberUids || []
+    const isNowMember = miembrosActuales.includes(colleagueId)
+    const newMiembros = isNowMember ? miembrosActuales.filter(m => m !== colleagueId) : [...miembrosActuales, colleagueId]
+    const newMemberUids = c?.uid
+      ? (isNowMember ? memberUids.filter(u => u !== c.uid) : [...memberUids, c.uid])
+      : memberUids
+    await updateDoc(doc(db, "equipos", id), { miembros: newMiembros, memberUids: newMemberUids })
+    setGrupo(prev => ({ ...prev, miembros: newMiembros, memberUids: newMemberUids }))
+  }
+
   if (loadingData || !grupo) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -621,959 +673,936 @@ export default function GroupDetail() {
   const labelCls = "text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1"
   const sectionHeaderCls = "flex items-center justify-between mb-4 cursor-pointer select-none"
 
-  return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* ── Header ── */}
-      <header className="sticky top-0 z-20 border-b border-border/60 px-6 py-3 flex justify-between items-center"
-        style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
-        <button onClick={() => navigate(`/semillero/${semilleroId}/dashboard?tab=equipos`)}
-          className="flex items-center gap-2 text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors">
-          ← Volver
-        </button>
-        <ThemeToggle />
-      </header>
 
-      {/* ── Hero banner ── */}
-      <div className="relative overflow-hidden px-6 py-10"
-        style={{ background: "linear-gradient(125deg, oklch(0.46 0.13 165) 0%, oklch(0.40 0.14 185) 45%, oklch(0.48 0.14 245) 100%)" }}>
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-0 right-0 w-72 h-72 opacity-30"
-            style={{ background: "radial-gradient(circle at top right, oklch(0.62 0.14 165), transparent 65%)", filter: "blur(40px)" }} />
-          <div className="absolute bottom-0 left-0 w-48 h-48 opacity-20"
-            style={{ background: "radial-gradient(circle, oklch(0.58 0.16 295), transparent 65%)", filter: "blur(30px)" }} />
+  return (
+    <div className="min-h-screen bg-background flex">
+
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-40 lg:hidden"
+          style={{ background: "oklch(0 0 0 / 45%)", backdropFilter: "blur(2px)" }}
+          onClick={() => setSidebarOpen(false)} />
+      )}
+
+      <aside
+        className={`fixed top-0 left-0 bottom-0 z-50 flex flex-col border-r border-border/50 transition-transform duration-300 ease-in-out lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+        style={{ width: 272, background: "var(--sidebar)" }}>
+
+        <div className="px-5 pt-5 pb-4 flex-shrink-0">
+          <button onClick={() => { navigate(`/semillero/${semilleroId}/dashboard?tab=equipos`); setSidebarOpen(false) }}
+            className="text-[12px] font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+            ← Volver a grupos
+          </button>
         </div>
-        <div className="max-w-4xl mx-auto w-full relative">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-5">
-            <div className="w-16 h-16 rounded-2xl flex-shrink-0 flex items-center justify-center text-white font-bold text-2xl"
-              style={{
-                background: "linear-gradient(135deg, oklch(0.62 0.18 165), oklch(0.54 0.22 205))",
-                boxShadow: "0 12px 32px oklch(0.52 0.13 165 / 45%), 0 0 0 2px oklch(0.68 0.12 165 / 30%)",
-              }}>
-              {grupo.nombre?.charAt(0).toUpperCase()}
+
+        <div className="mx-4 h-px bg-border/60 flex-shrink-0" />
+
+        <div className="px-5 py-6 flex-shrink-0 text-center">
+          <div className="w-[84px] h-[84px] rounded-2xl flex items-center justify-center text-white font-bold text-3xl mx-auto mb-3"
+            style={{
+              background: `linear-gradient(135deg, oklch(0.62 0.18 ${hue}), oklch(0.52 0.22 ${(parseInt(hue) + 45) % 360}))`,
+              boxShadow: `0 8px 28px oklch(0.52 0.18 ${hue} / 30%)`,
+            }}>
+            {grupo.nombre?.charAt(0).toUpperCase()}
+          </div>
+          <p className="text-[15px] font-bold text-foreground leading-snug">{grupo.nombre}</p>
+          {grupo.descripcion && (
+            <p className="text-[12px] text-muted-foreground mt-1 leading-relaxed">{grupo.descripcion}</p>
+          )}
+          <span className="inline-block mt-2 text-[10px] font-semibold px-2.5 py-0.5 rounded-full"
+            style={{ backgroundColor: `oklch(0.62 0.18 ${hue} / 0.12)`, color: `oklch(0.42 0.18 ${hue})` }}>
+            Grupo
+          </span>
+        </div>
+
+        <div className="mx-4 h-px bg-border/60 flex-shrink-0" />
+
+        <div className="flex-1 px-4 overflow-y-auto">
+          <div className="py-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
+                Miembros — {miembros.length}
+              </p>
+              {isAdmin && (
+                <button
+                  onClick={() => setShowMemberManager(v => !v)}
+                  className="text-[10px] font-semibold flex items-center gap-1 px-2 py-0.5 rounded-lg transition-colors"
+                  style={{ color: `oklch(0.52 0.22 ${hue})`, background: `oklch(0.62 0.18 ${hue} / 0.10)` }}>
+                  <Pencil size={10} />
+                  {showMemberManager ? "Listo" : "Gestionar"}
+                </button>
+              )}
             </div>
-            <div className="flex-1 min-w-0">
-              <h1 className="text-[26px] font-bold text-white leading-tight tracking-tight">{grupo.nombre}</h1>
-              {grupo.descripcion && <p className="text-[13px] text-white/75 mt-0.5">{grupo.descripcion}</p>}
-              {miembros.length > 0 && (
-                <div className="flex items-center gap-2 mt-3 flex-wrap">
-                  <div className="flex -space-x-2">
-                    {miembros.slice(0, 6).map(c => {
-                      const ch = c.colorHue ?? hashHue(c.id)
-                      return (
-                        <a key={c.id} href={`/semillero/${semilleroId}/colleague/${c.id}`}
-                          className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] ring-2 flex-shrink-0 hover:z-10 hover:scale-110 transition-transform overflow-hidden"
-                          style={{
-                            background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${(ch+40)%360}))`,
-                            ringColor: "oklch(0.46 0.13 165)",
-                          }}
-                          title={c.nombre}>
+
+            {showMemberManager && isAdmin && (
+              <div className="mb-4 space-y-1">
+                <p className="text-[10px] text-muted-foreground mb-2">Toca para agregar/quitar:</p>
+                {colleagues.map(c => {
+                  const ch = c.colorHue ?? hashHue(c.id)
+                  const isMem = (grupo.miembros || []).includes(c.id)
+                  return (
+                    <button key={c.id}
+                      onClick={() => handleToggleMember(c.id)}
+                      className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left transition-all"
+                      style={isMem ? {
+                        background: `oklch(0.62 0.18 ${ch} / 0.10)`,
+                        border: `1px solid oklch(0.62 0.18 ${ch} / 0.30)`,
+                      } : {
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                      }}>
+                      <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0 overflow-hidden"
+                        style={{ background: c.avatarUrl ? "var(--muted)" : `oklch(0.68 0.18 ${ch})` }}>
+                        {c.avatarUrl
+                          ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
+                          : c.avatarEmoji
+                            ? <span className="text-xs leading-none">{c.avatarEmoji}</span>
+                            : c.nombre?.charAt(0).toUpperCase()}
+                      </div>
+                      <span className="flex-1 text-[12px] font-medium text-foreground truncate">{c.nombre?.split(" ").slice(0, 2).join(" ")}</span>
+                      {isMem
+                        ? <X size={11} style={{ color: "oklch(0.60 0.18 27)", flexShrink: 0 }} />
+                        : <Plus size={10} style={{ opacity: 0.4, flexShrink: 0 }} />
+                      }
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            {!showMemberManager && (
+              miembros.length === 0 ? (
+                <p className="text-[12px] text-muted-foreground italic px-1">Sin miembros. Usa "Gestionar" para agregar.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {miembros.map(c => {
+                    const ch = c.colorHue ?? hashHue(c.id)
+                    const ch2 = c.colorHue2 ?? null
+                    return (
+                      <a key={c.id}
+                        href={`/semillero/${semilleroId}/colleague/${c.id}`}
+                        className="flex items-center gap-2.5 px-2 py-1.5 rounded-xl hover:bg-muted/50 transition-colors">
+                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[11px] flex-shrink-0 overflow-hidden"
+                          style={{ background: c.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${ch}), oklch(0.54 0.22 ${ch2 ?? (ch + 40) % 360}))` }}>
                           {c.avatarUrl
                             ? <img src={c.avatarUrl} alt={c.nombre} className="w-full h-full object-cover" />
                             : c.avatarEmoji
                               ? <span className="text-sm leading-none">{c.avatarEmoji}</span>
-                              : c.nombre?.charAt(0).toUpperCase()
-                          }
-                        </a>
-                      )
-                    })}
-                    {miembros.length > 6 && (
-                      <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-[10px] font-semibold text-white ring-2 ring-white/20">
-                        +{miembros.length - 6}
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-[12px] text-white/70">{miembros.length} miembro{miembros.length !== 1 ? "s" : ""}</span>
-                  {contacts.length > 0 && (
-                    <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full"
-                      style={{ background: "oklch(0.30 0.06 165)", color: "oklch(0.88 0.08 165)" }}>
-                      {contacts.length} participante{contacts.length !== 1 ? "s" : ""}
-                    </span>
-                  )}
+                              : c.nombre?.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[12px] font-medium text-foreground truncate">{c.nombre}</p>
+                          {c.rol && <p className="text-[10px] text-muted-foreground truncate">{c.rol}</p>}
+                        </div>
+                      </a>
+                    )
+                  })}
                 </div>
-              )}
-            </div>
+              )
+            )}
           </div>
         </div>
-      </div>
+      </aside>
 
-      <main className="px-6 py-8 max-w-4xl mx-auto w-full flex-1 space-y-6">
+      <style>{`@media (min-width: 1024px) { .gd-offset { margin-left: 272px; } }`}</style>
+      <div className="gd-offset flex-1 flex flex-col min-h-screen">
 
-        {/* ══ PROYECTOS ══════════════════════════════════════════════════════ */}
-        <section className="bg-card border border-border rounded-2xl p-5">
-          <div className={sectionHeaderCls} onClick={() => toggleSection("proyectos")}>
-            <div className="flex items-center gap-3">
-              <h2 className="text-[16px] font-bold text-foreground">Proyectos</h2>
-              <span className="text-[12px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{grupo.proyectos?.length || 0}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              {(isAdmin || isMember) && openSections.proyectos && (
-                <button onClick={e => { e.stopPropagation(); setEditingProject(null); setProjectForm(EMPTY_PROJECT); setShowProjectForm(v => !v) }}
-                  className="flex items-center gap-1 text-[12px] font-medium px-3 py-1 rounded-lg"
+        <header className="sticky top-0 z-20 border-b border-border/60"
+          style={{ backgroundColor: "color-mix(in srgb, var(--background) 85%, transparent)", backdropFilter: "blur(20px)" }}>
+          <div className="h-14 px-5 flex items-center gap-3">
+            <button className="lg:hidden text-muted-foreground hover:text-foreground text-xl leading-none"
+              onClick={() => setSidebarOpen(v => !v)}>☰</button>
+            <div className="flex-1" />
+            <ThemeToggle />
+          </div>
+          <div className="flex border-t border-border/40 px-1 overflow-x-auto">
+            {[
+              { key: "proyectos", label: "Proyectos", count: grupo.proyectos?.length || 0 },
+              { key: "bitacora", label: "Bitácora", count: logs.length },
+              { key: "tareas", label: "Tareas", count: tareasPendientes.length },
+              { key: "feedback", label: "Retroalimentación", count: feedback.length },
+              ...(isAdmin ? [{ key: "participantes", label: "Participantes", count: contacts.length }] : []),
+            ].map(t => (
+              <button key={t.key} onClick={() => setActiveTab(t.key)}
+                className="flex items-center gap-1.5 px-4 py-3 text-[13px] font-medium border-b-2 transition-all -mb-px whitespace-nowrap"
+                style={activeTab === t.key
+                  ? { color: "var(--foreground)", borderBottomColor: `oklch(0.52 0.22 ${hue})` }
+                  : { color: "var(--muted-foreground)", borderBottomColor: "transparent" }}>
+                {t.label}
+                {t.count > 0 && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                    style={activeTab === t.key
+                      ? { background: `oklch(0.52 0.22 ${hue} / 0.14)`, color: `oklch(0.42 0.22 ${hue})` }
+                      : { background: "var(--muted)", color: "var(--muted-foreground)" }}>
+                    {t.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <main className="flex-1 px-6 py-6 space-y-5">
+
+          {activeTab === "proyectos" && (<>
+            <div className="flex justify-between items-center">
+              <h2 className="text-[18px] font-bold text-foreground tracking-tight">
+                Proyectos <span className="text-[14px] font-normal text-muted-foreground ml-1">({grupo.proyectos?.length || 0})</span>
+              </h2>
+              {(isAdmin || isMember) && (
+                <button onClick={() => { setEditingProject(null); setProjectForm(EMPTY_PROJECT); setPdfImported(false); setPdfError(null); setShowProjectForm(v => !v) }}
+                  className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-xl transition-all hover:opacity-90"
                   style={{ background: `oklch(0.62 0.22 ${hue} / 0.12)`, color: `oklch(0.52 0.22 ${hue})` }}>
-                  <Plus size={12} /> Proyecto
+                  <Plus size={13} /> Proyecto
                 </button>
               )}
-              {openSections.proyectos ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
             </div>
-          </div>
-
-          {openSections.proyectos && (
-            <>
-              {/* Formulario proyecto */}
-              {showProjectForm && (isAdmin || isMember) && (
-                <div className="bg-muted/40 border border-border rounded-xl p-4 mb-4 space-y-3">
-                  <p className="text-[13px] font-semibold text-foreground">{editingProject ? "Editar proyecto" : "Nuevo proyecto"}</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <p className={labelCls}>Nombre *</p>
-                      <input placeholder="Nombre del proyecto" value={projectForm.nombre}
-                        onChange={e => setProjectForm(f => ({ ...f, nombre: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div>
-                      <p className={labelCls}>Estado</p>
-                      <select value={projectForm.estado} onChange={e => setProjectForm(f => ({ ...f, estado: e.target.value }))}
-                        className={inputCls}>
-                        {ESTADOS.map(s => <option key={s}>{s}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <p className={labelCls}>Área</p>
-                      <input placeholder="Área o enfoque" value={projectForm.area}
-                        onChange={e => setProjectForm(f => ({ ...f, area: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div>
-                      <p className={labelCls}>Herramientas (separadas por coma)</p>
-                      <input placeholder="React, Firebase, Python…" value={projectForm.herramientas}
-                        onChange={e => setProjectForm(f => ({ ...f, herramientas: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div>
-                      <p className={labelCls}>Fecha inicio</p>
-                      <input type="date" value={projectForm.fechaInicio}
-                        onChange={e => setProjectForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div>
-                      <p className={labelCls}>Fecha entrega</p>
-                      <input type="date" value={projectForm.fechaEntrega}
-                        onChange={e => setProjectForm(f => ({ ...f, fechaEntrega: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <p className={labelCls}>Qué hace</p>
-                      <textarea placeholder="Descripción del proyecto…" value={projectForm.queHace}
-                        onChange={e => setProjectForm(f => ({ ...f, queHace: e.target.value }))}
-                        rows={2} className={inputCls + " resize-none"} />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <p className={labelCls}>Avance: {projectForm.avance}%</p>
-                      <input type="range" min="0" max="100" step="5" value={projectForm.avance}
-                        onChange={e => setProjectForm(f => ({ ...f, avance: e.target.value }))}
-                        className="w-full accent-primary" />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <p className={labelCls}>Observaciones</p>
-                      <textarea placeholder="Notas adicionales…" value={projectForm.observaciones}
-                        onChange={e => setProjectForm(f => ({ ...f, observaciones: e.target.value }))}
-                        rows={2} className={inputCls + " resize-none"} />
-                    </div>
-                  </div>
-                  {/* ── Archivos del proyecto (solo en edición) ── */}
-                  {editingProject && (() => {
-                    const editProjName = editingProject?.nombre || editingProject
-                    const proyDocs = groupDocuments.filter(d => d.proyectoNombre === editProjName)
-                    const isUploading = uploadingForProject === editProjName && uploadProgress !== null
-                    return (
-                      <div className="border-t border-border pt-3 mt-1">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className={labelCls + " mb-0"}>Archivos del proyecto</p>
-                          <button
-                            type="button"
-                            onClick={() => { uploadingProjectRef.current = editProjName; setUploadingForProject(editProjName); fileInputRef.current?.click() }}
-                            disabled={uploadProgress !== null}
-                            className="text-[11px] font-semibold px-3 py-1 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
-                            style={{ background: `oklch(0.52 0.22 ${hue})` }}>
-                            {isUploading ? `${uploadProgress}%` : "↑ Subir archivo"}
-                          </button>
-                        </div>
-                        {isUploading && (
-                          <div className="h-1 rounded-full bg-muted overflow-hidden mb-2">
-                            <div className="h-full rounded-full transition-all duration-200"
-                              style={{ width: `${uploadProgress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
-                          </div>
-                        )}
-                        {uploadingForProject === editProjName && uploadError && (
-                          <p className="text-[11px] text-destructive mb-2">{uploadError}</p>
-                        )}
-                        {proyDocs.length === 0 ? (
-                          <p className="text-[11px] text-muted-foreground italic">Sin archivos aún.</p>
-                        ) : (
-                          <div className="space-y-1.5">
-                            {proyDocs.map(d => {
-                              const fi = getFileTypeInfo(d.tipo, d.nombre)
-                              return (
-                                <div key={d.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/60 bg-background/60">
-                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0"
-                                    style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
-                                  <span className="flex-1 text-[11px] text-foreground truncate">{d.nombre}</span>
-                                  {d.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
-                                  <button type="button" onClick={() => downloadFile(d.url, d.nombre)}
-                                    className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
-                                  {isAdmin && (
-                                    <button type="button" onClick={() => handleDeleteGroupDoc(d)}
-                                      className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
-                                  )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
+            {showProjectForm && (isAdmin || isMember) && (
+              <div className="bg-muted/40 border border-border rounded-xl p-4 space-y-3">
+                <p className="text-[13px] font-semibold text-foreground">{editingProject ? "Editar proyecto" : "Nuevo proyecto"}</p>
+                <input ref={pdfInputRef} type="file" accept="application/pdf" className="hidden" onChange={handlePdfImport} />
+                {!editingProject && (
+                  <div className="rounded-xl border border-border bg-card p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-base"
+                        style={{ background: "oklch(0.55 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>⬆</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-semibold text-foreground">Importar desde PDF de propuesta</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Sube el PDF del Asistente de Propuestas CUN y los campos se llenarán automáticamente.</p>
+                        {pdfError && <p className="text-[11px] text-destructive mt-1">{pdfError}</p>}
+                        {pdfImported && <p className="text-[11px] mt-1 font-medium" style={{ color: "oklch(0.55 0.18 145)" }}>✓ Datos importados. Revisa y ajusta si es necesario.</p>}
                       </div>
-                    )
-                  })()}
-
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={handleSaveProject} disabled={savingProject}>
-                      {savingProject ? "Guardando…" : editingProject ? "Actualizar" : "Crear proyecto"}
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => { setShowProjectForm(false); setEditingProject(null) }}>Cancelar</Button>
+                      <button type="button" onClick={() => pdfInputRef.current?.click()} disabled={pdfLoading}
+                        className="flex-shrink-0 text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-border text-foreground hover:border-primary/40 hover:bg-muted/60 disabled:opacity-50 transition-all">
+                        {pdfLoading ? "Leyendo…" : "Seleccionar PDF"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <p className={labelCls}>Nombre *</p>
+                    <input placeholder="Nombre del proyecto" value={projectForm.nombre}
+                      onChange={e => setProjectForm(f => ({ ...f, nombre: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div>
+                    <p className={labelCls}>Estado</p>
+                    <select value={projectForm.estado} onChange={e => setProjectForm(f => ({ ...f, estado: e.target.value }))} className={inputCls}>
+                      {ESTADOS.map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <p className={labelCls}>Área</p>
+                    <input placeholder="Área o enfoque" value={projectForm.area}
+                      onChange={e => setProjectForm(f => ({ ...f, area: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div>
+                    <p className={labelCls}>Herramientas (separadas por coma)</p>
+                    <input placeholder="React, Firebase, Python…" value={projectForm.herramientas}
+                      onChange={e => setProjectForm(f => ({ ...f, herramientas: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div>
+                    <p className={labelCls}>Fecha inicio</p>
+                    <input type="date" value={projectForm.fechaInicio}
+                      onChange={e => setProjectForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div>
+                    <p className={labelCls}>Fecha entrega</p>
+                    <input type="date" value={projectForm.fechaEntrega}
+                      onChange={e => setProjectForm(f => ({ ...f, fechaEntrega: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <p className={labelCls}>Qué hace</p>
+                    <textarea placeholder="Descripción del proyecto…" value={projectForm.queHace}
+                      onChange={e => setProjectForm(f => ({ ...f, queHace: e.target.value }))}
+                      rows={2} className={inputCls + " resize-none"} />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <p className={labelCls}>Avance: {projectForm.avance}%</p>
+                    <input type="range" min="0" max="100" step="5" value={projectForm.avance}
+                      onChange={e => setProjectForm(f => ({ ...f, avance: e.target.value }))} className="w-full accent-primary" />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <p className={labelCls}>Observaciones</p>
+                    <textarea placeholder="Notas adicionales…" value={projectForm.observaciones}
+                      onChange={e => setProjectForm(f => ({ ...f, observaciones: e.target.value }))}
+                      rows={2} className={inputCls + " resize-none"} />
                   </div>
                 </div>
-              )}
-
-              {/* Buscador */}
-              {(grupo.proyectos?.length || 0) > 3 && (
-                <input placeholder="Buscar proyecto…" value={projectSearch}
-                  onChange={e => setProjectSearch(e.target.value)}
-                  className={inputCls + " mb-3"} />
-              )}
-
-              {/* Lista proyectos */}
-              {proyectos.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.13 165)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-                    </svg>
-                  </div>
-                  <p className="text-[13px] font-medium text-muted-foreground">{grupo.proyectos?.length > 0 ? "Sin coincidencias." : "Sin proyectos aún."}</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {proyectos.map((p, i) => {
-                    const stateHue = STATE_COLOR[p.estado] || "260"
-                    const av = p.avance ?? 0
-                    return (
-                      <div key={i} className="border border-border rounded-xl p-4 relative"
-                        style={{ borderLeft: `3px solid oklch(0.62 0.18 ${stateHue})` }}>
-                        <div className="flex items-start justify-between gap-2 mb-2">
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-bold text-foreground text-[14px]">{p.nombre}</span>
-                              {p.estado && (
-                                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
-                                  style={{ background: `oklch(0.62 0.18 ${stateHue} / 0.13)`, color: `oklch(0.52 0.20 ${stateHue})` }}>
-                                  {p.estado}
-                                </span>
-                              )}
-                              {p.area && (
-                                <span className="text-[11px] text-muted-foreground px-2 py-0.5 rounded-full bg-muted">{p.area}</span>
-                              )}
-                            </div>
-                          </div>
-                          {(isAdmin || isMember) && (
-                            <div className="flex gap-2 flex-shrink-0 items-center">
-                              {isAdmin && (
-                                <button
-                                  onClick={() => handleReturnProject(p)}
-                                  title="Devolver al perfil individual"
-                                  className="text-[11px] font-medium px-2 py-0.5 rounded-md transition-colors"
-                                  style={{ color: "oklch(0.55 0.16 145)", background: "oklch(0.55 0.16 145 / 0.10)" }}>
-                                  ← Individual
-                                </button>
-                              )}
-                              <button onClick={() => openEditProject(p)} className="text-muted-foreground hover:text-foreground transition-colors">
-                                <Pencil size={13} />
-                              </button>
-                              {isAdmin && (
-                                <button onClick={() => handleDeleteProject(p)} className="text-destructive/60 hover:text-destructive transition-colors">
-                                  <Trash2 size={13} />
-                                </button>
-                              )}
-                            </div>
-                          )}
+                {editingProject && (() => {
+                  const editProjName = editingProject?.nombre || editingProject
+                  const proyDocs = groupDocuments.filter(d => d.proyectoNombre === editProjName)
+                  const isUploading = uploadingForProject === editProjName && uploadProgress !== null
+                  return (
+                    <div className="border-t border-border pt-3 mt-1">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className={labelCls + " mb-0"}>Archivos del proyecto</p>
+                        <button type="button"
+                          onClick={() => { uploadingProjectRef.current = editProjName; setUploadingForProject(editProjName); fileInputRef.current?.click() }}
+                          disabled={uploadProgress !== null}
+                          className="text-[11px] font-semibold px-3 py-1 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
+                          style={{ background: `oklch(0.52 0.22 ${hue})` }}>
+                          {isUploading ? `${uploadProgress}%` : "↑ Subir archivo"}
+                        </button>
+                      </div>
+                      {isUploading && (
+                        <div className="h-1 rounded-full bg-muted overflow-hidden mb-2">
+                          <div className="h-full rounded-full transition-all duration-200"
+                            style={{ width: `${uploadProgress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
                         </div>
-                        {/* Avance */}
-                        <div className="mb-2">
-                          <div className="flex justify-between text-[11px] mb-1">
-                            <span className="text-muted-foreground">Avance</span>
-                            <span style={{ color: avanceColor(av) }} className="font-semibold">{av}%</span>
-                          </div>
-                          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "oklch(0.40 0.02 260 / 0.3)" }}>
-                            <div className="h-full rounded-full" style={{ width: `${av}%`, background: avanceColor(av) }} />
-                          </div>
-                        </div>
-                        {p.queHace && <p className="text-[12.5px] text-muted-foreground mb-2 leading-relaxed">{p.queHace}</p>}
-                        {p.herramientas?.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mb-2">
-                            {p.herramientas.map(h => (
-                              <span key={h} className="text-[11px] px-2 py-0.5 rounded-md bg-muted text-muted-foreground">{h}</span>
-                            ))}
-                          </div>
-                        )}
-                        {(p.fechaInicio || p.fechaEntrega) && (
-                          <div className="flex gap-4 text-[11px] text-muted-foreground">
-                            {p.fechaInicio && <span>Inicio: <strong>{p.fechaInicio}</strong></span>}
-                            {p.fechaEntrega && <span>Entrega: <strong>{p.fechaEntrega}</strong></span>}
-                          </div>
-                        )}
-                        {p.observaciones && (
-                          <p className="text-[12px] text-muted-foreground mt-2 italic">{p.observaciones}</p>
-                        )}
-
-                        {/* ── Archivos del proyecto ── */}
-                        {canAccess && (() => {
-                          const proyDocs = groupDocuments.filter(d => d.proyectoNombre === p.nombre)
-                          const isOpen = openDocProjects.has(p.nombre)
-                          const isUploading = uploadingForProject === p.nombre && uploadProgress !== null
-                          return (
-                            <div className="mt-3 pt-3 border-t border-border">
-                              <div className="flex items-center justify-between">
-                                <button
-                                  onClick={() => setOpenDocProjects(prev => {
-                                    const s = new Set(prev)
-                                    s.has(p.nombre) ? s.delete(p.nombre) : s.add(p.nombre)
-                                    return s
-                                  })}
-                                  className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
-                                  <span>Archivos</span>
-                                  {proyDocs.length > 0 && (
-                                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                                      style={{ backgroundColor: `oklch(0.62 0.18 ${hue} / 0.15)`, color: `oklch(0.52 0.20 ${hue})` }}>
-                                      {proyDocs.length}
-                                    </span>
-                                  )}
-                                  <span className="text-[10px] opacity-50">{isOpen ? "▲" : "▼"}</span>
-                                </button>
-                                <button
-                                  onClick={() => { uploadingProjectRef.current = p.nombre; setUploadingForProject(p.nombre); fileInputRef.current?.click() }}
-                                  disabled={uploadProgress !== null}
-                                  className="text-[11px] font-semibold px-3 py-1 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
-                                  style={{ background: `oklch(0.52 0.22 ${hue})` }}>
-                                  {isUploading ? `${uploadProgress}%` : "↑ Subir"}
-                                </button>
+                      )}
+                      {uploadingForProject === editProjName && uploadError && (
+                        <p className="text-[11px] text-destructive mb-2">{uploadError}</p>
+                      )}
+                      {proyDocs.length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground italic">Sin archivos aún.</p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {proyDocs.map(d => {
+                            const fi = getFileTypeInfo(d.tipo, d.nombre)
+                            return (
+                              <div key={d.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/60 bg-background/60">
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0"
+                                  style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
+                                <span className="flex-1 text-[11px] text-foreground truncate">{d.nombre}</span>
+                                {d.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
+                                <button type="button" onClick={() => downloadFile(d.url, d.nombre)}
+                                  className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
+                                {isAdmin && (
+                                  <button type="button" onClick={() => handleDeleteGroupDoc(d)}
+                                    className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
+                                )}
                               </div>
-                              {isUploading && (
-                                <div className="h-1 rounded-full bg-muted overflow-hidden mt-2">
-                                  <div className="h-full rounded-full transition-all duration-200"
-                                    style={{ width: `${uploadProgress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
-                                </div>
-                              )}
-                              {uploadingForProject === p.nombre && uploadError && (
-                                <p className="text-[11px] text-destructive mt-1">{uploadError}</p>
-                              )}
-                              {isOpen && (
-                                <div className="mt-2 space-y-1.5">
-                                  {proyDocs.length === 0 ? (
-                                    <p className="text-[11px] text-muted-foreground italic">Sin archivos aún.</p>
-                                  ) : proyDocs.map(d => {
-                                    const fi = getFileTypeInfo(d.tipo, d.nombre)
-                                    return (
-                                      <div key={d.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/60 bg-muted/30">
-                                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0"
-                                          style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
-                                        <span className="flex-1 text-[11px] text-foreground truncate">{d.nombre}</span>
-                                        {d.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
-                                        <button type="button" onClick={() => downloadFile(d.url, d.nombre)}
-                                          className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
-                                        {isAdmin && (
-                                          <button onClick={() => handleDeleteGroupDoc(d)}
-                                            className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
-                                        )}
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })()}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-
-        {/* ══ BITÁCORA ════════════════════════════════════════════════════════ */}
-        <section className="bg-card border border-border rounded-2xl p-5">
-          <div className={sectionHeaderCls} onClick={() => toggleSection("bitacora")}>
-            <div className="flex items-center gap-3">
-              <h2 className="text-[16px] font-bold text-foreground">Bitácora</h2>
-              <span className="text-[12px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{logs.length}</span>
-            </div>
-            {openSections.bitacora ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
-          </div>
-
-          {openSections.bitacora && (
-            <>
-              {/* Entrada */}
-              {canLog && (
-                <div className="mb-4 relative">
-                  <textarea
-                    ref={notaRef}
-                    placeholder="Escribe una nota del grupo…"
-                    value={nota}
-                    onChange={e => setNota(e.target.value)}
-                    rows={3}
-                    className={inputCls + " resize-none pr-10"}
-                  />
-                  <button className="absolute right-3 bottom-3 text-muted-foreground hover:text-foreground"
-                    onClick={() => setShowEmoji(v => !v)}>😊</button>
-                  {showEmoji && (
-                    <div className="absolute right-0 top-full mt-1 z-50">
-                      <EmojiPicker onEmojiClick={e => { setNota(n => n + e.emoji); setShowEmoji(false); notaRef.current?.focus() }} height={350} width={300} />
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <Button size="sm" className="mt-2" onClick={handleAddLog} disabled={savingLog || !nota.trim()}>
-                    {savingLog ? "Guardando…" : "Agregar nota"}
+                  )
+                })()}
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleSaveProject} disabled={savingProject}>
+                    {savingProject ? "Guardando…" : editingProject ? "Actualizar" : "Crear proyecto"}
                   </Button>
+                  <Button size="sm" variant="outline" onClick={() => { setShowProjectForm(false); setEditingProject(null) }}>Cancelar</Button>
                 </div>
-              )}
-
-              {/* Lista */}
-              {logs.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.13 165)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/>
-                    </svg>
-                  </div>
-                  <p className="text-[13px] font-medium text-muted-foreground">Sin notas aún.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {logs.map(l => {
-                    const canEditLog = isAdmin || l.creadoPor === user?.uid
-                    return (
-                      <div key={l.id} className="border border-border/60 rounded-xl p-4">
-                        <div className="flex justify-between items-start gap-2">
-                          <div className="flex-1">
-                            {editingLogId === l.id ? (
-                              <div className="space-y-2">
-                                <textarea value={editingLogText} onChange={e => setEditingLogText(e.target.value)}
-                                  rows={3} className={inputCls + " resize-none"} />
-                                <div className="flex gap-2">
-                                  <button onClick={() => handleSaveEditLog(l.id)}
-                                    className="text-[12px] text-primary flex items-center gap-1 hover:opacity-80"><Check size={12} /> Guardar</button>
-                                  <button onClick={() => setEditingLogId(null)}
-                                    className="text-[12px] text-muted-foreground flex items-center gap-1 hover:text-foreground"><X size={12} /> Cancelar</button>
-                                </div>
-                              </div>
-                            ) : (
-                              <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{l.nota}</p>
+              </div>
+            )}
+            {(grupo.proyectos?.length || 0) > 3 && (
+              <input placeholder="Buscar proyecto…" value={projectSearch}
+                onChange={e => setProjectSearch(e.target.value)} className={inputCls} />
+            )}
+            {proyectos.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
+                <p className="text-[13px] font-medium text-muted-foreground">{grupo.proyectos?.length > 0 ? "Sin coincidencias." : "Sin proyectos aún."}</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {proyectos.map((p, i) => {
+                  const stateHue = STATE_COLOR[p.estado] || "260"
+                  const av = p.avance ?? 0
+                  return (
+                    <div key={i} className="border border-border rounded-xl p-4"
+                      style={{ borderLeft: `3px solid oklch(0.62 0.18 ${stateHue})` }}>
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-foreground text-[14px]">{p.nombre}</span>
+                            {p.estado && (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                                style={{ background: `oklch(0.62 0.18 ${stateHue} / 0.13)`, color: `oklch(0.52 0.20 ${stateHue})` }}>
+                                {p.estado}
+                              </span>
                             )}
-                            <div className="flex items-center gap-2 mt-1.5">
-                              <span className="text-[11px] text-muted-foreground font-medium">{l.creadoPorNombre}</span>
-                              {l.createdAt?.toDate && (
-                                <span className="text-[11px] text-muted-foreground capitalize">
-                                  · {format(l.createdAt.toDate(), "d 'de' MMM 'a las' HH:mm", { locale: es })}
-                                </span>
-                              )}
-                            </div>
+                            {p.area && (
+                              <span className="text-[11px] text-muted-foreground px-2 py-0.5 rounded-full bg-muted">{p.area}</span>
+                            )}
                           </div>
-                          {canEditLog && editingLogId !== l.id && (
-                            <div className="flex gap-2 flex-shrink-0">
-                              <button onClick={() => { setEditingLogId(l.id); setEditingLogText(l.nota) }}
-                                className="text-muted-foreground hover:text-foreground transition-colors"><Pencil size={13} /></button>
-                              <button onClick={() => handleDeleteLog(l.id)}
-                                className="text-destructive/60 hover:text-destructive transition-colors"><Trash2 size={13} /></button>
-                            </div>
-                          )}
                         </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-
-        {/* ══ TAREAS ══════════════════════════════════════════════════════════ */}
-        <section className="bg-card border border-border rounded-2xl p-5">
-          <div className={sectionHeaderCls} onClick={() => toggleSection("tareas")}>
-            <div className="flex items-center gap-3">
-              <h2 className="text-[16px] font-bold text-foreground">Tareas</h2>
-              {tareasPendientes.length > 0 && (
-                <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full"
-                  style={{ background: "oklch(0.62 0.22 27 / 0.15)", color: "oklch(0.52 0.22 27)" }}>
-                  {tareasPendientes.length} pendiente{tareasPendientes.length !== 1 ? "s" : ""}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {isAdmin && openSections.tareas && (
-                <button onClick={e => { e.stopPropagation(); setShowTaskForm(v => !v) }}
-                  className="flex items-center gap-1 text-[12px] font-medium px-3 py-1 rounded-lg"
-                  style={{ background: `oklch(0.62 0.22 ${hue} / 0.12)`, color: `oklch(0.52 0.22 ${hue})` }}>
-                  <Plus size={12} /> Tarea
-                </button>
-              )}
-              {openSections.tareas ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
-            </div>
-          </div>
-
-          {openSections.tareas && (
-            <>
-              {showTaskForm && isAdmin && (
-                <div className="bg-muted/40 border border-border rounded-xl p-4 mb-4 space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="sm:col-span-2">
-                      <p className={labelCls}>Título *</p>
-                      <input placeholder="Título de la tarea" value={taskForm.titulo}
-                        onChange={e => setTaskForm(f => ({ ...f, titulo: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <p className={labelCls}>Descripción</p>
-                      <input placeholder="Descripción (opcional)" value={taskForm.descripcion}
-                        onChange={e => setTaskForm(f => ({ ...f, descripcion: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div>
-                      <p className={labelCls}>Fecha inicio</p>
-                      <input type="date" value={taskForm.fechaInicio}
-                        onChange={e => setTaskForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div>
-                      <p className={labelCls}>Fecha límite</p>
-                      <input type="date" value={taskForm.fechaLimite}
-                        onChange={e => setTaskForm(f => ({ ...f, fechaLimite: e.target.value }))} className={inputCls} />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <p className={labelCls}>Avance inicial: {taskForm.avance}%</p>
-                      <input type="range" min="0" max="100" step="5" value={taskForm.avance}
-                        onChange={e => setTaskForm(f => ({ ...f, avance: Number(e.target.value) }))}
-                        className="w-full accent-primary" />
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={handleAddTask} disabled={savingTask}>
-                      {savingTask ? "Guardando…" : "Crear tarea"}
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setShowTaskForm(false)}>Cancelar</Button>
-                  </div>
-                </div>
-              )}
-
-              {tasks.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: "oklch(0.52 0.13 165 / 0.10)" }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="oklch(0.52 0.13 165)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="9,11 12,14 22,4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-                    </svg>
-                  </div>
-                  <p className="text-[13px] font-medium text-muted-foreground">Sin tareas aún.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {[...tareasPendientes, ...tareasHechas].map(t => {
-                    const done = t.estado === "Hecho"
-                    return (
-                      <div key={t.id} className="p-3 rounded-xl border border-border/60 group">
-                        {editingTaskId === t.id ? (
-                          <div className="space-y-3">
-                            <input value={editingTaskForm.titulo}
-                              onChange={e => setEditingTaskForm(f => ({ ...f, titulo: e.target.value }))}
-                              placeholder="Título *" className={inputCls} />
-                            <input value={editingTaskForm.descripcion}
-                              onChange={e => setEditingTaskForm(f => ({ ...f, descripcion: e.target.value }))}
-                              placeholder="Descripción (opcional)" className={inputCls} />
-                            <div className="flex gap-3">
-                              <div className="flex-1">
-                                <p className={labelCls}>Fecha inicio</p>
-                                <input type="date" value={editingTaskForm.fechaInicio || ""}
-                                  onChange={e => setEditingTaskForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
-                              </div>
-                              <div className="flex-1">
-                                <p className={labelCls}>Fecha límite</p>
-                                <input type="date" value={editingTaskForm.fechaLimite || ""}
-                                  onChange={e => setEditingTaskForm(f => ({ ...f, fechaLimite: e.target.value }))} className={inputCls} />
-                              </div>
-                            </div>
-                            <div>
-                              <p className={labelCls}>Avance: {editingTaskForm.avance ?? 0}%</p>
-                              <input type="range" min="0" max="100" step="5" value={editingTaskForm.avance ?? 0}
-                                onChange={e => setEditingTaskForm(f => ({ ...f, avance: Number(e.target.value) }))}
-                                className="w-full accent-primary" />
-                            </div>
-                            <div className="flex gap-2">
-                              <Button size="sm" onClick={() => handleSaveEditTask(t)}>Guardar</Button>
-                              <Button size="sm" variant="outline" onClick={() => setEditingTaskId(null)}>Cancelar</Button>
-                            </div>
-                            {t.plazoAceptado && (
-                              <div className= "px-3 py-2 rounded-lg"
-                                style={{ background: "oklch(0.62 0.20 145 / 0.12)", border: "1px solid oklch(0.62 0.20 145 / 0.35)" }}>
-                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.20 145)" }}>✓ Solicitud de tiempo aceptada</p>
-                                <p className="text-[11px] text-muted-foreground mt-0.5">
-                                  Nueva fecha límite: {format(new Date(t.plazoAceptado.nuevaFecha + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
-                                </p>
-                              </div>
-                            )}
-                            {t.plazoRechazado && (
-                              <div className="px-3 py-2 rounded-lg"
-                                style={{ background: "oklch(0.62 0.22 25 / 0.12)", border: "1px solid oklch(0.62 0.22 25 / 0.35)" }}>
-                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.22 25)" }}>✗ Solicitud de tiempo rechazada</p>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="flex items-start gap-3">
-                            <button onClick={() => handleTaskStatus(t.id, done ? "Pendiente" : "Hecho")}
-                              className="flex-shrink-0 mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all"
-                              style={{ borderColor: done ? "oklch(0.55 0.18 145)" : "var(--border)", backgroundColor: done ? "oklch(0.55 0.18 145)" : "transparent" }}>
-                              {done && <Check size={10} className="text-white" />}
-                            </button>
-                            <div className="flex-1 min-w-0">
-                              <p className={`text-[13px] font-medium leading-tight ${done ? "line-through text-muted-foreground" : "text-foreground"}`}>
-                                {t.titulo}
-                              </p>
-                              {t.descripcion && <p className="text-[11px] text-muted-foreground mt-0.5">{t.descripcion}</p>}
-                              {/* Avance — slider para miembros no-admin, barra para el resto */}
-                              {isMember && !isAdmin && !done ? (
-                                <div className="mt-1.5">
-                                  <div className="flex justify-between text-[10px] mb-1">
-                                    <span className="text-muted-foreground font-medium">Avance</span>
-                                    <span className="font-bold tabular-nums" style={{ color: (taskAvanceLocal[t.id] ?? t.avance ?? 0) >= 100 ? "oklch(0.55 0.18 145)" : (taskAvanceLocal[t.id] ?? t.avance ?? 0) >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }}>
-                                      {taskAvanceLocal[t.id] ?? t.avance ?? 0}%
-                                    </span>
-                                  </div>
-                                  <input type="range" min="0" max="100" step="5"
-                                    value={taskAvanceLocal[t.id] ?? t.avance ?? 0}
-                                    onChange={e => setTaskAvanceLocal(prev => ({ ...prev, [t.id]: Number(e.target.value) }))}
-                                    disabled={savingAvance === t.id}
-                                    className="w-full accent-primary disabled:opacity-50" />
-                                  {taskAvanceLocal[t.id] != null && taskAvanceLocal[t.id] !== (t.avance ?? 0) && (
-                                    <div className="flex items-center gap-2 mt-1">
-                                      <button onClick={() => handleUpdateAvance(t.id, taskAvanceLocal[t.id])}
-                                        disabled={savingAvance === t.id}
-                                        className="text-[10px] font-bold px-2.5 py-1 rounded-lg text-white disabled:opacity-50"
-                                        style={{ background: `oklch(0.52 0.22 ${hue})` }}>
-                                        {savingAvance === t.id ? "Guardando…" : "Guardar avance"}
-                                      </button>
-                                      <button onClick={() => setTaskAvanceLocal(prev => { const n = { ...prev }; delete n[t.id]; return n })}
-                                        className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">
-                                        Descartar
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (t.avance != null && t.avance > 0) && (
-                                <div className="mt-1.5">
-                                  <div className="flex justify-between text-[10px] mb-0.5">
-                                    <span className="text-muted-foreground">Avance</span>
-                                    <span className="font-semibold" style={{ color: t.avance >= 100 ? "oklch(0.55 0.18 145)" : t.avance >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }}>
-                                      {t.avance}%
-                                    </span>
-                                  </div>
-                                  <div className="h-1.5 rounded-full overflow-hidden bg-muted">
-                                    <div className="h-full rounded-full" style={{ width: `${t.avance}%`, background: t.avance >= 100 ? "oklch(0.55 0.18 145)" : t.avance >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }} />
-                                  </div>
-                                </div>
-                              )}
-                              <div className="flex gap-3 mt-0.5 flex-wrap">
-                                {t.fechaInicio && <p className="text-[11px] text-muted-foreground">Inicio: {t.fechaInicio}</p>}
-                                {t.fechaLimite && <p className="text-[11px] text-muted-foreground">Límite: {t.fechaLimite}</p>}
-                              </div>
-
-                              {/* Solicitud de plazo — admin ve el aviso */}
-                              {t.solicitudPlazo && isAdmin && (
-                                <div className="mt-2 px-3 py-2 rounded-lg"
-                                  style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
-                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>
-                                    ⏰ Solicitud de más tiempo · {t.solicitudPlazo.solicitadoPor}
-                                  </p>
-                                  <p className="text-[12px] text-foreground mt-0.5">{t.solicitudPlazo.motivo}</p>
-                                  {t.solicitudPlazo.fechaPropuesta && (
-                                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                                      Fecha propuesta: {format(new Date(t.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
-                                    </p>
-                                  )}
-                                  {aceptandoPlazoId === t.id ? (
-                                    <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                      <input type="date" value={fechaAceptar} onChange={e => setFechaAceptar(e.target.value)}
-                                        className="bg-background border border-border rounded-lg px-2 py-1 text-[11px] text-foreground focus:outline-none" />
-                                      <button onClick={() => handleAceptarPlazo(t)} disabled={!fechaAceptar || savingPlazo}
-                                        className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
-                                        style={{ background: "oklch(0.55 0.18 145)" }}>
-                                        {savingPlazo ? "…" : "Confirmar"}
-                                      </button>
-                                      <button onClick={() => { setAceptandoPlazoId(null); setFechaAceptar("") }}
-                                        className="h-6 px-2 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
-                                        Cancelar
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <div className="flex gap-2 mt-2">
-                                      <button onClick={() => handleAceptarPlazo(t)} disabled={savingPlazo}
-                                        className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
-                                        style={{ background: "oklch(0.55 0.18 145)" }}>
-                                        {savingPlazo ? "…" : "✓ Aceptar"}
-                                      </button>
-                                      <button onClick={() => handleRechazarPlazo(t.id)} disabled={savingPlazo}
-                                        className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
-                                        style={{ background: "oklch(0.50 0.22 25)" }}>
-                                        {savingPlazo ? "…" : "✗ Rechazar"}
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Confirmación para el miembro que ya solicitó */}
-                              {t.solicitudPlazo && isMember && editandoSolicitudId !== t.id && (
-                                <div className="mt-1.5 px-3 py-2 rounded-lg"
-                                  style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
-                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>⏰ Solicitud enviada</p>
-                                  <p className="text-[12px] text-foreground mt-0.5">{t.solicitudPlazo.motivo}</p>
-                                  {t.solicitudPlazo.fechaPropuesta && (
-                                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                                      Fecha propuesta: {format(new Date(t.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
-                                    </p>
-                                  )}
-                                  <button onClick={() => { setEditandoSolicitudId(t.id); setSolicitudMotivo(t.solicitudPlazo.motivo || ""); setSolicitudFecha(t.solicitudPlazo.fechaPropuesta || ""); setSolicitudPlazoId(t.id) }}
-                                    className="text-[11px] font-medium mt-1 hover:opacity-70 transition-opacity" style={{ color: "oklch(0.58 0.20 55)" }}>
-                                    ✏ Editar solicitud
-                                  </button>
-                                </div>
-                              )}
-
-                              {/* Resultado de solicitud de plazo */}
-                              {t.plazoAceptado && (
-                                <div className="mt-2 px-3 py-2 rounded-lg"
-                                  style={{ background: "oklch(0.62 0.20 145 / 0.12)", border: "1px solid oklch(0.62 0.20 145 / 0.35)" }}>
-                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.20 145)" }}>✓ Solicitud de tiempo aceptada</p>
-                                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                                    Nueva fecha límite: {format(new Date(t.plazoAceptado.nuevaFecha + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
-                                  </p>
-                                </div>
-                              )}
-                              {t.plazoRechazado && (
-                                <div className="mt-2 px-3 py-2 rounded-lg"
-                                  style={{ background: "oklch(0.62 0.22 25 / 0.12)", border: "1px solid oklch(0.62 0.22 25 / 0.35)" }}>
-                                  <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.22 25)" }}>✗ Solicitud de tiempo rechazada</p>
-                                </div>
-                              )}
-
-                              {/* Archivos adjuntos de la tarea */}
-                              {canAccess && (
-                                <div className="mt-2 pt-2 border-t border-border">
-                                  <div className="flex items-center justify-between">
-                                    <button
-                                      onClick={() => setOpenTaskFiles(prev => { const s = new Set(prev); s.has(t.id) ? s.delete(t.id) : s.add(t.id); return s })}
-                                      className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
-                                      <span>Archivos</span>
-                                      {(t.archivos?.length > 0) && (
-                                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                                          style={{ background: `oklch(0.62 0.22 ${hue} / 0.15)`, color: `oklch(0.52 0.22 ${hue})` }}>
-                                          {t.archivos.length}
-                                        </span>
-                                      )}
-                                      <span className="text-[9px] opacity-40">{openTaskFiles.has(t.id) ? "▲" : "▼"}</span>
-                                    </button>
-                                    <button
-                                      onClick={() => { uploadingTaskIdRef.current = t.id; taskFileInputRef.current?.click() }}
-                                      disabled={taskFileProgress !== null}
-                                      className="text-[10px] font-bold px-2.5 py-1 rounded-lg text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
-                                      style={{ background: `oklch(0.52 0.22 ${hue})` }}>
-                                      {taskFileProgress?.taskId === t.id ? `${taskFileProgress.progress}%` : "↑ Subir"}
-                                    </button>
-                                  </div>
-                                  {taskFileProgress?.taskId === t.id && (
-                                    <div className="h-1 rounded-full bg-muted overflow-hidden mt-1.5">
-                                      <div className="h-full rounded-full transition-all"
-                                        style={{ width: `${taskFileProgress.progress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
-                                    </div>
-                                  )}
-                                  {openTaskFiles.has(t.id) && (
-                                    <div className="mt-1.5 space-y-1">
-                                      {!t.archivos?.length ? (
-                                        <p className="text-[10px] text-muted-foreground italic py-1">Sin archivos adjuntos.</p>
-                                      ) : t.archivos.map((arch, ai) => {
-                                        const fi = getFileTypeInfo(arch.tipo, arch.nombre)
-                                        return (
-                                          <div key={ai} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors">
-                                            <span className="text-[9px] font-black px-1.5 py-0.5 rounded flex-shrink-0"
-                                              style={{ background: fi.bg, color: fi.color }}>{fi.label}</span>
-                                            <span className="text-[11px] text-foreground truncate flex-1 min-w-0">{arch.nombre}</span>
-                                            {arch.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(arch.size)}</span>}
-                                            <button type="button" onClick={() => downloadFile(arch.url, arch.nombre)}
-                                              className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
-                                            {(isAdmin || isMember) && (
-                                              <button onClick={() => handleDeleteGroupTaskFile(t.id, arch)}
-                                                className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">✕</button>
-                                            )}
-                                          </div>
-                                        )
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Botón / formulario para pedir plazo */}
-                              {isMember && !done && !t.plazoAceptado && !t.plazoRechazado && (!t.solicitudPlazo || editandoSolicitudId === t.id) && (
-                                solicitudPlazoId === t.id ? (
-                                  <div className="mt-2 space-y-2">
-                                    <textarea
-                                      value={solicitudMotivo}
-                                      onChange={e => setSolicitudMotivo(e.target.value)}
-                                      placeholder="¿Por qué necesitas más tiempo?"
-                                      rows={2}
-                                      className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none"
-                                    />
-                                    <div className="flex flex-wrap gap-2 items-center">
-                                      <input type="date" value={solicitudFecha}
-                                        onChange={e => setSolicitudFecha(e.target.value)}
-                                        className="bg-muted/50 border border-border rounded-xl px-3 py-1.5 text-[12px] text-foreground focus:outline-none" />
-                                      <span className="text-[11px] text-muted-foreground">fecha propuesta (opcional)</span>
-                                    </div>
-                                    <div className="flex gap-2">
-                                      <button onClick={() => { handleSolicitarPlazo(t.id); setEditandoSolicitudId(null) }}
-                                        disabled={savingSolicitud || !solicitudMotivo.trim()}
-                                        className="h-7 px-3 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
-                                        style={{ background: "oklch(0.58 0.20 55)" }}>
-                                        {savingSolicitud ? "Enviando…" : "Enviar solicitud"}
-                                      </button>
-                                      <button onClick={() => { setSolicitudPlazoId(null); setSolicitudMotivo(""); setSolicitudFecha(""); setEditandoSolicitudId(null) }}
-                                        className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
-                                        Cancelar
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <button onClick={() => { setSolicitudPlazoId(t.id); setSolicitudMotivo(""); setSolicitudFecha("") }}
-                                    className="mt-1.5 text-[11px] font-medium hover:opacity-70 transition-opacity"
-                                    style={{ color: "oklch(0.58 0.20 55)" }}>
-                                    ⏳ Solicitar más tiempo
-                                  </button>
-                                )
-                              )}
-                            </div>
+                        {(isAdmin || isMember) && (
+                          <div className="flex gap-2 flex-shrink-0 items-center">
                             {isAdmin && (
-                              <div className="flex gap-1.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onClick={() => { setEditingTaskId(t.id); setEditingTaskForm({ titulo: t.titulo, descripcion: t.descripcion || "", fechaInicio: t.fechaInicio || "", fechaLimite: t.fechaLimite || "", avance: t.avance ?? 0 }) }}
-                                  className="text-muted-foreground hover:text-foreground transition-colors"><Pencil size={13} /></button>
-                                <button onClick={() => handleDeleteTask(t.id)}
-                                  className="text-destructive/60 hover:text-destructive transition-colors"><Trash2 size={13} /></button>
-                              </div>
+                              <button onClick={() => handleReturnProject(p)} title="Devolver al perfil individual"
+                                className="text-[11px] font-medium px-2 py-0.5 rounded-md transition-colors"
+                                style={{ color: "oklch(0.55 0.16 145)", background: "oklch(0.55 0.16 145 / 0.10)" }}>
+                                ← Individual
+                              </button>
+                            )}
+                            <button onClick={() => openEditProject(p)} className="text-muted-foreground hover:text-foreground transition-colors">
+                              <Pencil size={13} />
+                            </button>
+                            {isAdmin && (
+                              <button onClick={() => handleDeleteProject(p)} className="text-destructive/60 hover:text-destructive transition-colors">
+                                <Trash2 size={13} />
+                              </button>
                             )}
                           </div>
                         )}
                       </div>
-                    )
-                  })}
-                </div>
-              )}
-            </>
-          )}
-        </section>
+                      <div className="mb-2">
+                        <div className="flex justify-between text-[11px] mb-1">
+                          <span className="text-muted-foreground">Avance</span>
+                          <span style={{ color: avanceColor(av) }} className="font-semibold">{av}%</span>
+                        </div>
+                        <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "oklch(0.40 0.02 260 / 0.3)" }}>
+                          <div className="h-full rounded-full" style={{ width: `${av}%`, background: avanceColor(av) }} />
+                        </div>
+                      </div>
+                      {p.queHace && <p className="text-[12.5px] text-muted-foreground mb-2 leading-relaxed">{p.queHace}</p>}
+                      {p.herramientas?.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {p.herramientas.map(h => (
+                            <span key={h} className="text-[11px] px-2 py-0.5 rounded-md bg-muted text-muted-foreground">{h}</span>
+                          ))}
+                        </div>
+                      )}
+                      {(p.fechaInicio || p.fechaEntrega) && (
+                        <div className="flex gap-4 text-[11px] text-muted-foreground">
+                          {p.fechaInicio && <span>Inicio: <strong>{p.fechaInicio}</strong></span>}
+                          {p.fechaEntrega && <span>Entrega: <strong>{p.fechaEntrega}</strong></span>}
+                        </div>
+                      )}
+                      {p.observaciones && <p className="text-[12px] text-muted-foreground mt-2 italic">{p.observaciones}</p>}
+                      {canAccess && (() => {
+                        const proyDocs = groupDocuments.filter(d => d.proyectoNombre === p.nombre)
+                        const isOpen = openDocProjects.has(p.nombre)
+                        const isUploading = uploadingForProject === p.nombre && uploadProgress !== null
+                        return (
+                          <div className="mt-3 pt-3 border-t border-border">
+                            <div className="flex items-center justify-between">
+                              <button
+                                onClick={() => setOpenDocProjects(prev => { const s = new Set(prev); s.has(p.nombre) ? s.delete(p.nombre) : s.add(p.nombre); return s })}
+                                className="flex items-center gap-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                                <span>Archivos</span>
+                                {proyDocs.length > 0 && (
+                                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                                    style={{ backgroundColor: `oklch(0.62 0.18 ${hue} / 0.15)`, color: `oklch(0.52 0.20 ${hue})` }}>
+                                    {proyDocs.length}
+                                  </span>
+                                )}
+                                <span className="text-[10px] opacity-50">{isOpen ? "▲" : "▼"}</span>
+                              </button>
+                              <button
+                                onClick={() => { uploadingProjectRef.current = p.nombre; setUploadingForProject(p.nombre); fileInputRef.current?.click() }}
+                                disabled={uploadProgress !== null}
+                                className="text-[11px] font-semibold px-3 py-1 rounded-lg text-white disabled:opacity-50 transition-all hover:opacity-90"
+                                style={{ background: `oklch(0.52 0.22 ${hue})` }}>
+                                {isUploading ? `${uploadProgress}%` : "↑ Subir"}
+                              </button>
+                            </div>
+                            {isUploading && (
+                              <div className="h-1 rounded-full bg-muted overflow-hidden mt-2">
+                                <div className="h-full rounded-full transition-all duration-200"
+                                  style={{ width: `${uploadProgress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
+                              </div>
+                            )}
+                            {uploadingForProject === p.nombre && uploadError && (
+                              <p className="text-[11px] text-destructive mt-1">{uploadError}</p>
+                            )}
+                            {isOpen && (
+                              <div className="mt-2 space-y-1.5">
+                                {proyDocs.length === 0 ? (
+                                  <p className="text-[11px] text-muted-foreground italic">Sin archivos aún.</p>
+                                ) : proyDocs.map(d => {
+                                  const fi = getFileTypeInfo(d.tipo, d.nombre)
+                                  return (
+                                    <div key={d.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/60 bg-muted/30">
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0"
+                                        style={{ color: fi.color, backgroundColor: fi.bg }}>{fi.label}</span>
+                                      <span className="flex-1 text-[11px] text-foreground truncate">{d.nombre}</span>
+                                      {d.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(d.size)}</span>}
+                                      <button type="button" onClick={() => downloadFile(d.url, d.nombre)}
+                                        className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
+                                      {isAdmin && (
+                                        <button onClick={() => handleDeleteGroupDoc(d)}
+                                          className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </>)}
 
-        {/* ══ RETROALIMENTACIÓN (admin escribe, grupo lee) ══════════════════ */}
-        <section className="bg-card border border-border rounded-2xl p-5">
-          <div className={sectionHeaderCls} onClick={() => toggleSection("feedback")}>
-            <div className="flex items-center gap-3">
-              <h2 className="text-[16px] font-bold text-foreground">Retroalimentación</h2>
-              <span className="text-[12px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{feedback.length}</span>
+          {activeTab === "bitacora" && (<>
+            <div className="flex justify-between items-center">
+              <h2 className="text-[18px] font-bold text-foreground tracking-tight">
+                Bitácora <span className="text-[14px] font-normal text-muted-foreground ml-1">({logs.length})</span>
+              </h2>
             </div>
-            {openSections.feedback ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
-          </div>
-
-          {openSections.feedback && (
-            <>
-              {isAdmin && (
-                <div className="mb-4">
-                  <textarea placeholder="Escribe retroalimentación para el grupo…"
-                    value={feedbackText} onChange={e => setFeedbackText(e.target.value)}
-                    rows={3} className={inputCls + " resize-none"} />
-                  <Button size="sm" className="mt-2" onClick={handleAddFeedback} disabled={savingFeedback || !feedbackText.trim()}>
-                    {savingFeedback ? "Guardando…" : "Enviar"}
-                  </Button>
-                </div>
-              )}
-
-              {feedback.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: "oklch(0.75 0.15 80 / 0.12)" }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="oklch(0.65 0.16 75)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                    </svg>
+            {canLog && (
+              <div className="relative">
+                <textarea ref={notaRef} placeholder="Escribe una nota del grupo…" value={nota}
+                  onChange={e => setNota(e.target.value)} rows={3} className={inputCls + " resize-none pr-10"} />
+                <button className="absolute right-3 bottom-3 text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowEmoji(v => !v)}>😊</button>
+                {showEmoji && (
+                  <div className="absolute right-0 top-full mt-1 z-50">
+                    <EmojiPicker onEmojiClick={e => { setNota(n => n + e.emoji); setShowEmoji(false); notaRef.current?.focus() }} height={350} width={300} />
                   </div>
-                  <p className="text-[13px] font-medium text-muted-foreground">Sin retroalimentación aún.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {feedback.map(f => (
-                    <div key={f.id} className="border border-border/60 rounded-xl p-4">
+                )}
+                <Button size="sm" className="mt-2" onClick={handleAddLog} disabled={savingLog || !nota.trim()}>
+                  {savingLog ? "Guardando…" : "Agregar nota"}
+                </Button>
+              </div>
+            )}
+            {logs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
+                <p className="text-[13px] font-medium text-muted-foreground">Sin notas aún.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {logs.map(l => {
+                  const canEditLog = isAdmin || l.creadoPor === user?.uid
+                  return (
+                    <div key={l.id} className="border border-border/60 rounded-xl p-4">
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1">
-                          {editingFbId === f.id ? (
+                          {editingLogId === l.id ? (
                             <div className="space-y-2">
-                              <textarea value={editingFbText} onChange={e => setEditingFbText(e.target.value)}
+                              <textarea value={editingLogText} onChange={e => setEditingLogText(e.target.value)}
                                 rows={3} className={inputCls + " resize-none"} />
                               <div className="flex gap-2">
-                                <button onClick={() => handleSaveEditFeedback(f.id)}
-                                  className="text-[12px] text-primary flex items-center gap-1"><Check size={12} /> Guardar</button>
-                                <button onClick={() => setEditingFbId(null)}
-                                  className="text-[12px] text-muted-foreground flex items-center gap-1"><X size={12} /> Cancelar</button>
+                                <button onClick={() => handleSaveEditLog(l.id)}
+                                  className="text-[12px] text-primary flex items-center gap-1 hover:opacity-80"><Check size={12} /> Guardar</button>
+                                <button onClick={() => setEditingLogId(null)}
+                                  className="text-[12px] text-muted-foreground flex items-center gap-1 hover:text-foreground"><X size={12} /> Cancelar</button>
                               </div>
                             </div>
                           ) : (
-                            <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{f.texto}</p>
+                            <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{l.nota}</p>
                           )}
                           <div className="flex items-center gap-2 mt-1.5">
-                            <span className="text-[11px] text-muted-foreground font-medium">{f.creadoPorNombre}</span>
-                            {f.createdAt?.toDate && (
+                            <span className="text-[11px] text-muted-foreground font-medium">{l.creadoPorNombre}</span>
+                            {l.createdAt?.toDate && (
                               <span className="text-[11px] text-muted-foreground capitalize">
-                                · {format(f.createdAt.toDate(), "d 'de' MMM 'a las' HH:mm", { locale: es })}
+                                · {format(l.createdAt.toDate(), "d 'de' MMM 'a las' HH:mm", { locale: es })}
                               </span>
                             )}
                           </div>
                         </div>
-                        {isAdmin && editingFbId !== f.id && (
+                        {canEditLog && editingLogId !== l.id && (
                           <div className="flex gap-2 flex-shrink-0">
-                            <button onClick={() => { setEditingFbId(f.id); setEditingFbText(f.texto) }}
+                            <button onClick={() => { setEditingLogId(l.id); setEditingLogText(l.nota) }}
                               className="text-muted-foreground hover:text-foreground transition-colors"><Pencil size={13} /></button>
-                            <button onClick={() => handleDeleteFeedback(f.id)}
+                            <button onClick={() => handleDeleteLog(l.id)}
                               className="text-destructive/60 hover:text-destructive transition-colors"><Trash2 size={13} /></button>
                           </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </>)}
+
+          {activeTab === "tareas" && (<>
+            <div className="flex justify-between items-center">
+              <h2 className="text-[18px] font-bold text-foreground tracking-tight">
+                Tareas
+                {tareasPendientes.length > 0 && (
+                  <span className="ml-2 text-[12px] font-semibold px-2 py-0.5 rounded-full"
+                    style={{ background: "oklch(0.62 0.22 27 / 0.15)", color: "oklch(0.52 0.22 27)" }}>
+                    {tareasPendientes.length} pendiente{tareasPendientes.length !== 1 ? "s" : ""}
+                  </span>
+                )}
+              </h2>
+              {isAdmin && (
+                <button onClick={() => setShowTaskForm(v => !v)}
+                  className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-xl transition-all hover:opacity-90"
+                  style={{ background: `oklch(0.62 0.22 ${hue} / 0.12)`, color: `oklch(0.52 0.22 ${hue})` }}>
+                  <Plus size={13} /> Tarea
+                </button>
+              )}
+            </div>
+            {showTaskForm && isAdmin && (
+              <div className="bg-muted/40 border border-border rounded-xl p-4 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="sm:col-span-2">
+                    <p className={labelCls}>Título *</p>
+                    <input placeholder="Título de la tarea" value={taskForm.titulo}
+                      onChange={e => setTaskForm(f => ({ ...f, titulo: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <p className={labelCls}>Descripción</p>
+                    <input placeholder="Descripción (opcional)" value={taskForm.descripcion}
+                      onChange={e => setTaskForm(f => ({ ...f, descripcion: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div>
+                    <p className={labelCls}>Fecha inicio</p>
+                    <input type="date" value={taskForm.fechaInicio}
+                      onChange={e => setTaskForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div>
+                    <p className={labelCls}>Fecha límite</p>
+                    <input type="date" value={taskForm.fechaLimite}
+                      onChange={e => setTaskForm(f => ({ ...f, fechaLimite: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <p className={labelCls}>Avance inicial: {taskForm.avance}%</p>
+                    <input type="range" min="0" max="100" step="5" value={taskForm.avance}
+                      onChange={e => setTaskForm(f => ({ ...f, avance: Number(e.target.value) }))} className="w-full accent-primary" />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleAddTask} disabled={savingTask}>
+                    {savingTask ? "Guardando…" : "Crear tarea"}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setShowTaskForm(false)}>Cancelar</Button>
+                </div>
+              </div>
+            )}
+            {tasks.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
+                <p className="text-[13px] font-medium text-muted-foreground">Sin tareas aún.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {[...tareasPendientes, ...tareasHechas].map(t => {
+                  const done = t.estado === "Hecho"
+                  return (
+                    <div key={t.id} className="p-3 rounded-xl border border-border/60 group">
+                      {editingTaskId === t.id ? (
+                        <div className="space-y-3">
+                          <input value={editingTaskForm.titulo}
+                            onChange={e => setEditingTaskForm(f => ({ ...f, titulo: e.target.value }))}
+                            placeholder="Título *" className={inputCls} />
+                          <input value={editingTaskForm.descripcion}
+                            onChange={e => setEditingTaskForm(f => ({ ...f, descripcion: e.target.value }))}
+                            placeholder="Descripción (opcional)" className={inputCls} />
+                          <div className="flex gap-3">
+                            <div className="flex-1">
+                              <p className={labelCls}>Fecha inicio</p>
+                              <input type="date" value={editingTaskForm.fechaInicio || ""}
+                                onChange={e => setEditingTaskForm(f => ({ ...f, fechaInicio: e.target.value }))} className={inputCls} />
+                            </div>
+                            <div className="flex-1">
+                              <p className={labelCls}>Fecha límite</p>
+                              <input type="date" value={editingTaskForm.fechaLimite || ""}
+                                onChange={e => setEditingTaskForm(f => ({ ...f, fechaLimite: e.target.value }))} className={inputCls} />
+                            </div>
+                          </div>
+                          <div>
+                            <p className={labelCls}>Avance: {editingTaskForm.avance ?? 0}%</p>
+                            <input type="range" min="0" max="100" step="5" value={editingTaskForm.avance ?? 0}
+                              onChange={e => setEditingTaskForm(f => ({ ...f, avance: Number(e.target.value) }))} className="w-full accent-primary" />
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => handleSaveEditTask(t)}>Guardar</Button>
+                            <Button size="sm" variant="outline" onClick={() => setEditingTaskId(null)}>Cancelar</Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-start gap-3">
+                          <button onClick={() => handleTaskStatus(t.id, done ? "Pendiente" : "Hecho")}
+                            className="flex-shrink-0 mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all"
+                            style={{ borderColor: done ? "oklch(0.55 0.18 145)" : "var(--border)", backgroundColor: done ? "oklch(0.55 0.18 145)" : "transparent" }}>
+                            {done && <Check size={10} className="text-white" />}
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-[13px] font-medium leading-tight ${done ? "line-through text-muted-foreground" : "text-foreground"}`}>
+                              {t.titulo}
+                            </p>
+                            {t.descripcion && <p className="text-[11px] text-muted-foreground mt-0.5">{t.descripcion}</p>}
+                            {isMember && !isAdmin && !done ? (
+                              <div className="mt-1.5">
+                                <div className="flex justify-between text-[10px] mb-1">
+                                  <span className="text-muted-foreground font-medium">Avance</span>
+                                  <span className="font-bold tabular-nums" style={{ color: (taskAvanceLocal[t.id] ?? t.avance ?? 0) >= 100 ? "oklch(0.55 0.18 145)" : (taskAvanceLocal[t.id] ?? t.avance ?? 0) >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }}>
+                                    {taskAvanceLocal[t.id] ?? t.avance ?? 0}%
+                                  </span>
+                                </div>
+                                <input type="range" min="0" max="100" step="5"
+                                  value={taskAvanceLocal[t.id] ?? t.avance ?? 0}
+                                  onChange={e => setTaskAvanceLocal(prev => ({ ...prev, [t.id]: Number(e.target.value) }))}
+                                  disabled={savingAvance === t.id} className="w-full accent-primary disabled:opacity-50" />
+                                {taskAvanceLocal[t.id] != null && taskAvanceLocal[t.id] !== (t.avance ?? 0) && (
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <button onClick={() => handleUpdateAvance(t.id, taskAvanceLocal[t.id])}
+                                      disabled={savingAvance === t.id}
+                                      className="text-[10px] font-bold px-2.5 py-1 rounded-lg text-white disabled:opacity-50"
+                                      style={{ background: `oklch(0.52 0.22 ${hue})` }}>
+                                      {savingAvance === t.id ? "Guardando…" : "Guardar avance"}
+                                    </button>
+                                    <button onClick={() => setTaskAvanceLocal(prev => { const n = { ...prev }; delete n[t.id]; return n })}
+                                      className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">
+                                      Descartar
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (t.avance != null && t.avance > 0) && (
+                              <div className="mt-1.5">
+                                <div className="flex justify-between text-[10px] mb-0.5">
+                                  <span className="text-muted-foreground">Avance</span>
+                                  <span className="font-semibold" style={{ color: t.avance >= 100 ? "oklch(0.55 0.18 145)" : t.avance >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }}>
+                                    {t.avance}%
+                                  </span>
+                                </div>
+                                <div className="h-1.5 rounded-full overflow-hidden bg-muted">
+                                  <div className="h-full rounded-full" style={{ width: `${t.avance}%`, background: t.avance >= 100 ? "oklch(0.55 0.18 145)" : t.avance >= 50 ? "oklch(0.55 0.18 260)" : "oklch(0.60 0.18 55)" }} />
+                                </div>
+                              </div>
+                            )}
+                            <div className="flex gap-3 mt-0.5 flex-wrap">
+                              {t.fechaInicio && <p className="text-[11px] text-muted-foreground">Inicio: {t.fechaInicio}</p>}
+                              {t.fechaLimite && <p className="text-[11px] text-muted-foreground">Límite: {t.fechaLimite}</p>}
+                            </div>
+                            {t.solicitudPlazo && isAdmin && (
+                              <div className="mt-2 px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                  ⏰ Solicitud · {t.solicitudPlazo.solicitadoPor}
+                                </p>
+                                <p className="text-[12px] text-foreground mt-0.5">{t.solicitudPlazo.motivo}</p>
+                                {t.solicitudPlazo.fechaPropuesta && (
+                                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                                    Propuesta: {format(new Date(t.solicitudPlazo.fechaPropuesta + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                  </p>
+                                )}
+                                {aceptandoPlazoId === t.id ? (
+                                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                    <input type="date" value={fechaAceptar} onChange={e => setFechaAceptar(e.target.value)}
+                                      className="bg-background border border-border rounded-lg px-2 py-1 text-[11px] text-foreground focus:outline-none" />
+                                    <button onClick={() => handleAceptarPlazo(t)} disabled={!fechaAceptar || savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.55 0.18 145)" }}>
+                                      {savingPlazo ? "…" : "Confirmar"}
+                                    </button>
+                                    <button onClick={() => { setAceptandoPlazoId(null); setFechaAceptar("") }}
+                                      className="h-6 px-2 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex gap-2 mt-2">
+                                    <button onClick={() => handleAceptarPlazo(t)} disabled={savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.55 0.18 145)" }}>
+                                      {savingPlazo ? "…" : "✓ Aceptar"}
+                                    </button>
+                                    <button onClick={() => handleRechazarPlazo(t.id)} disabled={savingPlazo}
+                                      className="h-6 px-2 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.50 0.22 25)" }}>
+                                      {savingPlazo ? "…" : "✗ Rechazar"}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {t.solicitudPlazo && isMember && editandoSolicitudId !== t.id && (
+                              <div className="mt-1.5 px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.68 0.18 55 / 0.10)", border: "1px solid oklch(0.68 0.18 55 / 0.30)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.58 0.20 55)" }}>⏰ Solicitud enviada</p>
+                                <p className="text-[12px] text-foreground mt-0.5">{t.solicitudPlazo.motivo}</p>
+                                <button onClick={() => { setEditandoSolicitudId(t.id); setSolicitudMotivo(t.solicitudPlazo.motivo || ""); setSolicitudFecha(t.solicitudPlazo.fechaPropuesta || ""); setSolicitudPlazoId(t.id) }}
+                                  className="text-[11px] font-medium mt-1 hover:opacity-70 transition-opacity" style={{ color: "oklch(0.58 0.20 55)" }}>
+                                  ✏ Editar solicitud
+                                </button>
+                              </div>
+                            )}
+                            {t.plazoAceptado && (
+                              <div className="mt-2 px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.62 0.20 145 / 0.12)", border: "1px solid oklch(0.62 0.20 145 / 0.35)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.20 145)" }}>✓ Plazo aceptado</p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                  Nueva fecha: {format(new Date(t.plazoAceptado.nuevaFecha + "T00:00:00"), "d 'de' MMMM, yyyy", { locale: es })}
+                                </p>
+                              </div>
+                            )}
+                            {t.plazoRechazado && (
+                              <div className="mt-2 px-3 py-2 rounded-lg"
+                                style={{ background: "oklch(0.62 0.22 25 / 0.12)", border: "1px solid oklch(0.62 0.22 25 / 0.35)" }}>
+                                <p className="text-[11px] font-bold" style={{ color: "oklch(0.62 0.22 25)" }}>✗ Plazo rechazado</p>
+                              </div>
+                            )}
+                            {canAccess && (
+                              <div className="mt-2 pt-2 border-t border-border">
+                                <div className="flex items-center justify-between">
+                                  <button
+                                    onClick={() => setOpenTaskFiles(prev => { const s = new Set(prev); s.has(t.id) ? s.delete(t.id) : s.add(t.id); return s })}
+                                    className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                                    <span>Archivos</span>
+                                    {(t.archivos?.length > 0) && (
+                                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                                        style={{ background: `oklch(0.62 0.22 ${hue} / 0.15)`, color: `oklch(0.52 0.22 ${hue})` }}>
+                                        {t.archivos.length}
+                                      </span>
+                                    )}
+                                    <span className="text-[9px] opacity-40">{openTaskFiles.has(t.id) ? "▲" : "▼"}</span>
+                                  </button>
+                                  <button
+                                    onClick={() => { uploadingTaskIdRef.current = t.id; taskFileInputRef.current?.click() }}
+                                    disabled={taskFileProgress !== null}
+                                    className="text-[10px] font-bold px-2.5 py-1 rounded-lg text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
+                                    style={{ background: `oklch(0.52 0.22 ${hue})` }}>
+                                    {taskFileProgress?.taskId === t.id ? `${taskFileProgress.progress}%` : "↑ Subir"}
+                                  </button>
+                                </div>
+                                {taskFileProgress?.taskId === t.id && (
+                                  <div className="h-1 rounded-full bg-muted overflow-hidden mt-1.5">
+                                    <div className="h-full rounded-full transition-all"
+                                      style={{ width: `${taskFileProgress.progress}%`, background: `oklch(0.52 0.22 ${hue})` }} />
+                                  </div>
+                                )}
+                                {openTaskFiles.has(t.id) && (
+                                  <div className="mt-1.5 space-y-1">
+                                    {!t.archivos?.length ? (
+                                      <p className="text-[10px] text-muted-foreground italic py-1">Sin archivos adjuntos.</p>
+                                    ) : t.archivos.map((arch, ai) => {
+                                      const fi = getFileTypeInfo(arch.tipo, arch.nombre)
+                                      return (
+                                        <div key={ai} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/40">
+                                          <span className="text-[9px] font-black px-1.5 py-0.5 rounded flex-shrink-0"
+                                            style={{ background: fi.bg, color: fi.color }}>{fi.label}</span>
+                                          <span className="text-[11px] text-foreground truncate flex-1 min-w-0">{arch.nombre}</span>
+                                          {arch.size && <span className="text-[10px] text-muted-foreground flex-shrink-0">{formatFileSize(arch.size)}</span>}
+                                          <button type="button" onClick={() => downloadFile(arch.url, arch.nombre)}
+                                            className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" title="Descargar">↓</button>
+                                          {(isAdmin || isMember) && (
+                                            <button onClick={() => handleDeleteGroupTaskFile(t.id, arch)}
+                                              className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">×</button>
+                                          )}
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {isMember && !done && !t.plazoAceptado && !t.plazoRechazado && (!t.solicitudPlazo || editandoSolicitudId === t.id) && (
+                              solicitudPlazoId === t.id ? (
+                                <div className="mt-2 space-y-2">
+                                  <textarea value={solicitudMotivo} onChange={e => setSolicitudMotivo(e.target.value)}
+                                    placeholder="¿Por qué necesitas más tiempo?" rows={2}
+                                    className="w-full bg-muted/50 border border-border rounded-xl px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 resize-none" />
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    <input type="date" value={solicitudFecha} onChange={e => setSolicitudFecha(e.target.value)}
+                                      className="bg-muted/50 border border-border rounded-xl px-3 py-1.5 text-[12px] text-foreground focus:outline-none" />
+                                    <span className="text-[11px] text-muted-foreground">fecha propuesta (opcional)</span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button onClick={() => { handleSolicitarPlazo(t.id); setEditandoSolicitudId(null) }}
+                                      disabled={savingSolicitud || !solicitudMotivo.trim()}
+                                      className="h-7 px-3 rounded-lg text-[11px] font-bold text-white disabled:opacity-50"
+                                      style={{ background: "oklch(0.58 0.20 55)" }}>
+                                      {savingSolicitud ? "Enviando…" : "Enviar solicitud"}
+                                    </button>
+                                    <button onClick={() => { setSolicitudPlazoId(null); setSolicitudMotivo(""); setSolicitudFecha(""); setEditandoSolicitudId(null) }}
+                                      className="h-7 px-3 rounded-lg text-[11px] border border-border text-muted-foreground hover:text-foreground">
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button onClick={() => { setSolicitudPlazoId(t.id); setSolicitudMotivo(""); setSolicitudFecha("") }}
+                                  className="mt-1.5 text-[11px] font-medium hover:opacity-70 transition-opacity"
+                                  style={{ color: "oklch(0.58 0.20 55)" }}>
+                                  ⏳ Solicitar más tiempo
+                                </button>
+                              )
+                            )}
+                          </div>
+                          {isAdmin && (
+                            <div className="flex gap-1.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => { setEditingTaskId(t.id); setEditingTaskForm({ titulo: t.titulo, descripcion: t.descripcion || "", fechaInicio: t.fechaInicio || "", fechaLimite: t.fechaLimite || "", avance: t.avance ?? 0 }) }}
+                                className="text-muted-foreground hover:text-foreground transition-colors"><Pencil size={13} /></button>
+                              <button onClick={() => handleDeleteTask(t.id)}
+                                className="text-destructive/60 hover:text-destructive transition-colors"><Trash2 size={13} /></button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </>)}
+
+          {activeTab === "feedback" && (<>
+            <div className="flex justify-between items-center">
+              <h2 className="text-[18px] font-bold text-foreground tracking-tight">
+                Retroalimentación <span className="text-[14px] font-normal text-muted-foreground ml-1">({feedback.length})</span>
+              </h2>
+            </div>
+            {isAdmin && (
+              <div>
+                <textarea placeholder="Escribe retroalimentación para el grupo…"
+                  value={feedbackText} onChange={e => setFeedbackText(e.target.value)}
+                  rows={3} className={inputCls + " resize-none"} />
+                <Button size="sm" className="mt-2" onClick={handleAddFeedback} disabled={savingFeedback || !feedbackText.trim()}>
+                  {savingFeedback ? "Guardando…" : "Enviar"}
+                </Button>
+              </div>
+            )}
+            {feedback.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 gap-3 border border-border/60 rounded-xl">
+                <p className="text-[13px] font-medium text-muted-foreground">Sin retroalimentación aún.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {feedback.map(f => (
+                  <div key={f.id} className="border border-border/60 rounded-xl p-4">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1">
+                        {editingFbId === f.id ? (
+                          <div className="space-y-2">
+                            <textarea value={editingFbText} onChange={e => setEditingFbText(e.target.value)}
+                              rows={3} className={inputCls + " resize-none"} />
+                            <div className="flex gap-2">
+                              <button onClick={() => handleSaveEditFeedback(f.id)}
+                                className="text-[12px] text-primary flex items-center gap-1"><Check size={12} /> Guardar</button>
+                              <button onClick={() => setEditingFbId(null)}
+                                className="text-[12px] text-muted-foreground flex items-center gap-1"><X size={12} /> Cancelar</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{f.texto}</p>
+                        )}
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <span className="text-[11px] text-muted-foreground font-medium">{f.creadoPorNombre}</span>
+                          {f.createdAt?.toDate && (
+                            <span className="text-[11px] text-muted-foreground capitalize">
+                              · {format(f.createdAt.toDate(), "d 'de' MMM 'a las' HH:mm", { locale: es })}
+                            </span>
                           )}
                         </div>
                       </div>
-                    ))}
+                      {isAdmin && editingFbId !== f.id && (
+                        <div className="flex gap-2 flex-shrink-0">
+                          <button onClick={() => { setEditingFbId(f.id); setEditingFbText(f.texto) }}
+                            className="text-muted-foreground hover:text-foreground transition-colors"><Pencil size={13} /></button>
+                          <button onClick={() => handleDeleteFeedback(f.id)}
+                            className="text-destructive/60 hover:text-destructive transition-colors"><Trash2 size={13} /></button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-              </>
+                ))}
+              </div>
             )}
-          </section>
+          </>)}
 
-        {/* ── Sección: Participantes importados ── */}
-        {(isAdmin || isMember) && (
-          <section className="space-y-3">
+          {activeTab === "participantes" && isAdmin && (<>
             <div className="flex items-center justify-between">
-              <button onClick={() => toggleSection("contactos")}
-                className="flex items-center gap-2 group">
-                <h2 className="text-[18px] font-bold text-foreground tracking-tight">Participantes</h2>
+              <h2 className="text-[18px] font-bold text-foreground tracking-tight">
+                Participantes
                 {contacts.length > 0 && (
-                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                  <span className="ml-2 text-[11px] font-semibold px-2 py-0.5 rounded-full"
                     style={{ background: "oklch(0.60 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>
                     {contacts.length}
                   </span>
                 )}
-                {openSections.contactos ? <ChevronUp size={15} className="text-muted-foreground" /> : <ChevronDown size={15} className="text-muted-foreground" />}
-              </button>
+              </h2>
               <div className="flex gap-2">
                 {contacts.length > 0 && (
                   <button onClick={handleDeleteAllContacts}
@@ -1581,28 +1610,20 @@ export default function GroupDetail() {
                     Limpiar todo
                   </button>
                 )}
-                <button
-                  onClick={() => contactsInputRef.current?.click()}
-                  disabled={importLoading}
+                <button onClick={() => contactsInputRef.current?.click()} disabled={importLoading}
                   className="text-[12px] font-semibold px-4 py-1.5 rounded-xl border border-border text-foreground hover:border-primary/40 hover:bg-muted/60 disabled:opacity-50 transition-all">
                   {importLoading ? "Leyendo…" : "↑ Importar Excel / CSV"}
                 </button>
               </div>
             </div>
-
-            {importError && (
-              <p className="text-[12px] text-destructive">{importError}</p>
-            )}
-
-            {/* Preview antes de confirmar */}
+            {importError && <p className="text-[12px] text-destructive">{importError}</p>}
             {importPreview && (
               <div className="rounded-2xl border border-border bg-card p-5 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-[13px] font-semibold text-foreground">
                     Se importarán <span style={{ color: "oklch(0.55 0.18 145)" }}>{importPreview.length} contactos</span>
                   </p>
-                  <button onClick={() => setImportPreview(null)}
-                    className="text-[11px] text-muted-foreground hover:text-foreground">✕ Cancelar</button>
+                  <button onClick={() => setImportPreview(null)} className="text-[11px] text-muted-foreground hover:text-foreground">✕ Cancelar</button>
                 </div>
                 <div className="overflow-x-auto rounded-xl border border-border">
                   <table className="w-full text-[12px]">
@@ -1622,9 +1643,7 @@ export default function GroupDetail() {
                         </tr>
                       ))}
                       {importPreview.length > 5 && (
-                        <tr><td colSpan={3} className="px-3 py-2 text-muted-foreground italic text-center">
-                          …y {importPreview.length - 5} más
-                        </td></tr>
+                        <tr><td colSpan={3} className="px-3 py-2 text-muted-foreground italic text-center">…y {importPreview.length - 5} más</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -1636,24 +1655,17 @@ export default function GroupDetail() {
                 </button>
               </div>
             )}
-
-            {/* Lista de contactos */}
-            {openSections.contactos && contacts.length > 0 && (
+            {contacts.length > 0 && (
               <>
-                <div className="relative">
-                  <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-                  </svg>
-                  <input type="text" placeholder="Buscar participante…" value={contactSearch}
-                    onChange={e => setContactSearch(e.target.value)}
-                    className="w-full h-9 bg-card border border-border rounded-xl pl-8 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 transition-all" />
-                </div>
+                <input type="text" placeholder="Buscar participante…" value={contactSearch}
+                  onChange={e => setContactSearch(e.target.value)}
+                  className="w-full h-9 bg-card border border-border rounded-xl pl-4 pr-4 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 transition-all" />
                 <div className="overflow-x-auto rounded-2xl border border-border">
                   <table className="w-full text-[13px]">
                     <thead>
                       <tr className="border-b border-border bg-card">
                         <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Nombre</th>
-                        <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Teléfono / WhatsApp</th>
+                        <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Teléfono</th>
                         <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Correo</th>
                         <th className="px-4 py-3" />
                       </tr>
@@ -1680,19 +1692,17 @@ export default function GroupDetail() {
                 </div>
               </>
             )}
-
-            {openSections.contactos && contacts.length === 0 && !importPreview && (
+            {contacts.length === 0 && !importPreview && (
               <div className="text-center py-10 text-muted-foreground bg-card border border-border rounded-2xl">
                 <p className="text-[13px]">Sin participantes importados. Sube un Excel o CSV con columnas: Nombre, Teléfono, Correo.</p>
               </div>
             )}
-          </section>
-        )}
+          </>)}
 
-      </main>
-      <Footer />
+        </main>
+        <Footer />
+      </div>
 
-      {/* Modal: devolver proyecto a perfil individual */}
       {returningProject && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: "oklch(0 0 0 / 0.55)", backdropFilter: "blur(4px)" }}>
@@ -1700,7 +1710,6 @@ export default function GroupDetail() {
             <h3 className="text-[15px] font-bold text-foreground mb-1">Devolver al perfil individual</h3>
             <p className="text-[12px] text-muted-foreground mb-4">
               Selecciona a qué compañera pertenece el proyecto <strong>"{returningProject.nombre}"</strong>.
-              Se añadirá a su perfil y se quitará del grupo.
             </p>
             <select
               value={returnTargetId || miembros[0]?.id || ""}
@@ -1711,15 +1720,12 @@ export default function GroupDetail() {
               ))}
             </select>
             <div className="flex gap-2">
-              <button
-                onClick={handleConfirmReturn}
-                disabled={savingReturn || !returnTargetId}
+              <button onClick={handleConfirmReturn} disabled={savingReturn || !returnTargetId}
                 className="flex-1 py-2 rounded-xl text-[13px] font-bold text-white disabled:opacity-50 transition-opacity hover:opacity-90"
                 style={{ background: "oklch(0.55 0.18 145)" }}>
                 {savingReturn ? "Devolviendo…" : "Confirmar"}
               </button>
-              <button
-                onClick={() => setReturningProject(null)}
+              <button onClick={() => setReturningProject(null)}
                 className="flex-1 py-2 rounded-xl text-[13px] border border-border text-muted-foreground hover:text-foreground transition-colors">
                 Cancelar
               </button>
@@ -1728,14 +1734,11 @@ export default function GroupDetail() {
         </div>
       )}
 
-      {/* Input oculto para importar participantes */}
       <input ref={contactsInputRef} type="file" accept=".csv,.xls,.xlsx"
         style={{ display: "none" }} onChange={handleContactsFileSelected} />
-      {/* Input oculto para documentos de proyectos */}
       <input ref={fileInputRef} type="file"
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"
         style={{ display: "none" }} onChange={handleFileSelected} />
-      {/* Input oculto para archivos de tareas */}
       <input ref={taskFileInputRef} type="file"
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
         style={{ display: "none" }} onChange={handleGroupTaskFileSelected} />

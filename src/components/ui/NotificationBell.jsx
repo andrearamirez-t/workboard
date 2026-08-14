@@ -2,14 +2,16 @@ import { useState, useEffect, useRef } from "react"
 import { Bell } from "lucide-react"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
-import { collection, query, orderBy, onSnapshot } from "firebase/firestore"
+import { collection, query, orderBy, onSnapshot, limit, where, Timestamp } from "firebase/firestore"
 import { db } from "@/services/firebase"
 
 const ICONS = {
-  tarea_asignada: "📋",
-  tarea_grupo: "📋",
-  feedback_grupo: "💬",
-  general: "🔔",
+  tarea_asignada:      "📋",
+  tarea_grupo:         "📋",
+  feedback_grupo:      "💬",
+  feedback_recibido:   "💬",
+  proyecto_agregado:   "🗂️",
+  general:             "🔔",
 }
 
 const storageKey = (type, id) => `wb_read_${type}_${id}`
@@ -40,29 +42,47 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid, s
 
     const unsubs = []
 
+    // Últimos 30 días
+    const cutoff = Timestamp.fromDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+
     if (isAdmin) {
-      // Notas del equipo — filtradas por semilleroId
-      const qLogs = query(collection(db, "logs"), orderBy("createdAt", "desc"))
+      // Notas del equipo — solo últimos 30 días, máx 40
+      const qLogs = query(
+        collection(db, "logs"),
+        where("createdAt", ">=", cutoff),
+        orderBy("createdAt", "desc"),
+        limit(40)
+      )
       unsubs.push(onSnapshot(qLogs, (snap) => {
         const readIds = getReadIds(key)
         const fresh = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
           .filter(doc => !semilleroId || doc.semilleroId === semilleroId)
           .filter(doc => !readIds.has(doc.id))
-          .map(doc => ({
-            id: doc.id,
-            source: "log",
-            text: `${doc.colleagueName || "Alguien"} agregó una nota`,
-            sub: doc.nota?.slice(0, 70) + (doc.nota?.length > 70 ? "…" : ""),
-            date: doc.createdAt?.toDate?.(),
-            href: `/semillero/${semilleroId}/colleague/${doc.colleagueId}`,
-            dot: "oklch(0.60 0.22 27)",
-          }))
+          .map(doc => {
+            const isProyecto = doc.tipo === "proyecto_agregado"
+            return {
+              id: doc.id,
+              source: "log",
+              text: isProyecto
+                ? `${doc.colleagueName || "Alguien"} agregó un proyecto`
+                : `${doc.colleagueName || "Alguien"} agregó una nota`,
+              sub: doc.nota?.slice(0, 70) + (doc.nota?.length > 70 ? "…" : ""),
+              date: doc.createdAt?.toDate?.(),
+              href: `/semillero/${semilleroId}/colleague/${doc.colleagueId}`,
+              dot: isProyecto ? "oklch(0.58 0.16 295)" : "oklch(0.60 0.22 27)",
+            }
+          })
         setItems(prev => [...prev.filter(i => i.source !== "log"), ...fresh])
       }, () => {}))
 
-      // Tareas completadas al 100% — filtradas por semilleroId
-      const qNotif = query(collection(db, "notificaciones"), orderBy("createdAt", "desc"))
+      // Tareas completadas al 100% — solo últimos 30 días
+      const qNotif = query(
+        collection(db, "notificaciones"),
+        where("createdAt", ">=", cutoff),
+        orderBy("createdAt", "desc"),
+        limit(20)
+      )
       unsubs.push(onSnapshot(qNotif, (snap) => {
         const readIds = getReadIds(keyNotif)
         const fresh = snap.docs
@@ -147,7 +167,9 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid, s
               sub: doc.subtitulo || null,
               date: doc.createdAt?.toDate?.(),
               href: doc.path || `/semillero/${semilleroId}/dashboard`,
-              dot: doc.tipo === "feedback_grupo" ? "oklch(0.60 0.22 27)" : "oklch(0.55 0.18 260)",
+              dot: (doc.tipo === "feedback_grupo" || doc.tipo === "feedback_recibido")
+                ? "oklch(0.60 0.22 27)"
+                : "oklch(0.55 0.18 260)",
             }))
           setItems(prev => [...prev.filter(i => i.source !== "unotif"), ...fresh])
         }, () => {}))
@@ -231,7 +253,7 @@ export function NotificationBell({ isAdmin, myColleagueId, userEmail, userUid, s
                 <p className="text-[13px] text-muted-foreground">Sin notificaciones nuevas</p>
               </div>
             ) : (
-              items.map(n => (
+              [...items].sort((a, b) => (b.date || 0) - (a.date || 0)).map(n => (
                 <a key={n.id} href={n.href}
                   onClick={() => markOne(n.id, n.source)}
                   className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 transition-colors border-b border-border/50 last:border-0">

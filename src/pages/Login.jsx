@@ -3,18 +3,16 @@ import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 
-const SUPER_ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jose_forero@cun.edu.co"]
-
 export default function Login() {
-  const { user, loading, loginWithGoogle, authError } = useAuth()
+  const { user, loading, loginWithGoogle, authError, isSuperAdmin, role } = useAuth()
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (!loading && user) {
-      const dest = SUPER_ADMIN_EMAILS.includes(user.email) ? "/overview" : "/semilleros"
+    if (!loading && user && role) {
+      const dest = isSuperAdmin ? "/overview" : "/semilleros"
       navigate(dest, { replace: true })
     }
-  }, [user, loading, navigate])
+  }, [user, loading, role, isSuperAdmin, navigate])
 
   return (
     <div className="min-h-screen flex flex-col bg-background relative overflow-hidden">

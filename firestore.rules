@@ -10,6 +10,15 @@ service cloud.firestore {
       ];
     }
 
+    // isRoleAdmin: incluye superadmins (hardcoded) y coordinadores (role=admin en Firestore)
+    function isRoleAdmin() {
+      return isAdmin() || (
+        request.auth != null &&
+        exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.role in ["admin", "superadmin"]
+      );
+    }
+
     function isGrupoMember(equipoId) {
       let eq = get(/databases/$(database)/documents/equipos/$(equipoId));
       return request.auth != null &&
@@ -17,7 +26,7 @@ service cloud.firestore {
     }
 
     function isGrupoMemberOrAdmin(equipoId) {
-      return isAdmin() || isGrupoMember(equipoId);
+      return isRoleAdmin() || isGrupoMember(equipoId);
     }
 
     function isColleagueOwner(docId) {
@@ -33,18 +42,18 @@ service cloud.firestore {
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || isColleagueOwner(docId);
 
-      // Retroalimentación: solo admin escribe, el dueño y admin leen
+      // Retroalimentación: coordinadores y superadmins escriben; dueño y coordinadores leen
       match /retroalimentacion/{fbId} {
-        allow read: if request.auth != null && (isAdmin() || isColleagueOwner(docId));
-        allow create: if isAdmin();
-        allow update, delete: if isAdmin();
+        allow read: if request.auth != null && (isRoleAdmin() || isColleagueOwner(docId));
+        allow create: if isRoleAdmin();
+        allow update, delete: if isRoleAdmin();
       }
 
-      // Tareas: admin crea/elimina, dueño y admin actualizan, ambos leen
+      // Tareas: coordinadores y superadmins crean/eliminan; dueño y coordinadores actualizan y leen
       match /tareas/{taskId} {
-        allow read: if request.auth != null && (isAdmin() || isColleagueOwner(docId));
-        allow create, delete: if isAdmin();
-        allow update: if isAdmin() || isColleagueOwner(docId);
+        allow read: if request.auth != null && (isRoleAdmin() || isColleagueOwner(docId));
+        allow create, delete: if isRoleAdmin();
+        allow update: if isRoleAdmin() || isColleagueOwner(docId);
       }
 
       // Documentos: dueño y admin suben, admin elimina, dueño y admin leen
@@ -65,7 +74,7 @@ service cloud.firestore {
 
     // ── Notificaciones de tareas ────────────────────────────────
     match /notificaciones/{notifId} {
-      allow read: if isAdmin();
+      allow read: if isRoleAdmin();
       allow create: if request.auth != null;
     }
 
@@ -81,6 +90,14 @@ service cloud.firestore {
     match /wpp_queue/{docId} {
       allow create: if isAdmin();
       allow read, update: if false; // solo Admin SDK vía Cloud Functions
+    }
+
+    // ── Roles de usuario ────────────────────────────────────────
+    match /usuarios/{uid} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && (request.auth.uid == uid || isAdmin());
+      allow update: if request.auth.uid == uid || isAdmin();
+      allow delete: if isAdmin();
     }
 
     // ── Workspaces de equipo ────────────────────────────────────
