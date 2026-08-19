@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo, useRef } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { getSemilleros } from "@/services/semilleros.service"
 import { getColleagues } from "@/services/colleagues.service"
-import { getAllLogs } from "@/services/logs.service"
+import { getAllLogs, deleteLog } from "@/services/logs.service"
 import { ThemeToggle } from "@/components/ui/ThemeToggle"
 import { MetricsDashboard } from "@/components/ui/MetricsDashboard"
 import { NotificationBell } from "@/components/ui/NotificationBell"
@@ -12,7 +12,7 @@ import { es } from "date-fns/locale"
 import {
   Users, Briefcase, Layers, ArrowRight, LogOut,
   Home, TrendingUp, BarChart2, Menu, Settings,
-  ChevronRight, ChevronDown, Activity
+  ChevronRight, ChevronDown, Activity, User, Trash2
 } from "lucide-react"
 import GestionarUsuarios from "@/pages/GestionarUsuarios"
 
@@ -29,13 +29,16 @@ function StatCard({ label, value, sub, hue = "165" }) {
 
 export default function GlobalDashboard() {
   const navigate = useNavigate()
-  const { user, logout, isSuperAdmin, isAdmin, mySemilleroId } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { user, logout, isSuperAdmin, isAdmin, mySemilleroId, myColleagueId } = useAuth()
 
   const [semilleros, setSemilleros] = useState([])
   const [colleagues, setColleagues] = useState([])
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState("resumen")
+  // Tab persiste en la URL (?tab=...) para que "atrás" restaure la pestaña correcta
+  const tab = searchParams.get("tab") || "resumen"
+  const setTab = (t) => setSearchParams({ tab: t }, { replace: true })
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [expandedLogId, setExpandedLogId] = useState(null)
   const [logFilter,  setLogFilter]  = useState(null)
@@ -94,6 +97,12 @@ export default function GlobalDashboard() {
 
   const userInitial = user?.displayName?.charAt(0)?.toUpperCase() || user?.email?.charAt(0)?.toUpperCase() || "?"
   const userFirstName = (user?.displayName || user?.email?.split("@")[0] || "Usuario").split(" ")[0]
+
+  // Buscar el perfil real por uid (evita duplicados por email); fallback a myColleagueId
+  const myCompanion = colleagues.find(c => c.uid === user?.uid)
+    || (myColleagueId ? colleagues.find(c => c.id === myColleagueId) : null)
+  const profileColleagueId = myCompanion?.id || myColleagueId
+  const profileSemilleroId = mySemilleroId || myCompanion?.semilleroId
 
   const weekLogs = useMemo(() => {
     const toDate = ts => ts?.toDate?.() || (ts?.seconds ? new Date(ts.seconds * 1000) : null)
@@ -158,8 +167,10 @@ export default function GlobalDashboard() {
 
       {/* User card */}
       <div className="px-4 py-4 flex-shrink-0">
-        <div className="flex items-center gap-2.5 px-3 py-3 rounded-xl"
-          style={{ background: "oklch(0.52 0.13 165 / 0.08)" }}>
+        <div
+          className={`flex items-center gap-2.5 px-3 py-3 rounded-xl transition-colors${profileColleagueId && profileSemilleroId ? " cursor-pointer hover:bg-[oklch(0.52_0.13_165_/_0.14)]" : ""}`}
+          style={{ background: "oklch(0.52 0.13 165 / 0.08)" }}
+          onClick={() => profileColleagueId && profileSemilleroId && navigate(`/semillero/${profileSemilleroId}/colleague/${profileColleagueId}`)}>
           <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[12px] font-bold flex-shrink-0"
             style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.42 0.14 185))" }}>
             {userInitial}
@@ -167,7 +178,7 @@ export default function GlobalDashboard() {
           <div className="min-w-0 flex-1">
             <p className="text-[12px] font-semibold text-foreground truncate leading-snug">{userFirstName}</p>
             <p className="text-[10px] truncate leading-snug" style={{ color: "oklch(0.52 0.13 165)" }}>
-              Super Admin
+              {isSuperAdmin ? "Super Admin" : isAdmin ? "Coordinador" : "Miembro"}
             </p>
           </div>
         </div>
@@ -221,6 +232,14 @@ export default function GlobalDashboard() {
 
       {/* Bottom */}
       <div className="px-3 py-4 space-y-0.5 flex-shrink-0">
+        {profileColleagueId && profileSemilleroId && (
+          <button
+            onClick={() => navigate(`/semillero/${profileSemilleroId}/colleague/${profileColleagueId}`)}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors hover:bg-muted text-left text-foreground">
+            <User size={16} className="flex-shrink-0 text-muted-foreground" />
+            Mi perfil
+          </button>
+        )}
         <button
           onClick={logout}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors hover:bg-muted text-left"
@@ -472,7 +491,7 @@ export default function GlobalDashboard() {
                           const hasLongNote = (log.nota || "").length > 90
                           return (
                             <div key={log.id}
-                              className={`px-4 py-3 hover:bg-muted/30 transition-colors ${i < weekLogs.length - 1 ? "border-b border-border/50" : ""}`}>
+                              className={`group px-4 py-3 hover:bg-muted/30 transition-colors ${i < weekLogs.length - 1 ? "border-b border-border/50" : ""}`}>
                               <div className="flex items-center gap-3 cursor-pointer"
                                 onClick={() => setExpandedLogId(isExpanded ? null : log.id)}>
                                 <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0"
@@ -496,6 +515,18 @@ export default function GlobalDashboard() {
                                       {format(logDate, "EEEE d MMM · HH:mm", { locale: es })}
                                     </span>
                                   )}
+                                  <button
+                                    onClick={async e => {
+                                      e.stopPropagation()
+                                      if (!confirm("¿Eliminar esta nota de actividad?")) return
+                                      await deleteLog(log.id).catch(() => {})
+                                      setLogs(prev => prev.filter(l => l.id !== log.id))
+                                    }}
+                                    className="w-6 h-6 rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:bg-destructive/10"
+                                    title="Eliminar nota"
+                                    style={{ color: "var(--destructive)" }}>
+                                    <Trash2 size={11} />
+                                  </button>
                                   <ChevronDown size={13} className="text-muted-foreground"
                                     style={{ transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }} />
                                 </div>

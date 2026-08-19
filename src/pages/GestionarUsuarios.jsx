@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from "react"
-import { collection, getDocs, deleteDoc, doc, updateDoc } from "firebase/firestore"
+import { useNavigate } from "react-router-dom"
+import { collection, getDocs, deleteDoc, doc, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore"
 import { db } from "@/services/firebase"
 import { getAllUsuarios, setUsuarioRole } from "@/services/usuarios.service"
 import { getColleaguesBySemillero } from "@/services/colleagues.service"
@@ -14,7 +15,8 @@ const ROLE_COLORS  = {
 }
 
 export default function GestionarUsuarios({ semilleros = [] }) {
-  const { isSuperAdmin, mySemilleroId } = useAuth()
+  const navigate = useNavigate()
+  const { user, isSuperAdmin, mySemilleroId } = useAuth()
   const [users,         setUsers]         = useState([])
   const [loading,       setLoading]       = useState(true)
   const [saving,        setSaving]        = useState(null)
@@ -66,17 +68,39 @@ export default function GestionarUsuarios({ semilleros = [] }) {
         const roleRank = r => r === "admin" ? 2 : r === "superadmin" ? 3 : 1
         usuariosDocs.forEach(u => {
           const email = u.email?.toLowerCase()
-          if (!email || SUPER_ADMIN_EMAILS.includes(email)) return
+          if (!email) return
+          const isSA = SUPER_ADMIN_EMAILS.includes(email)
           const prev = byEmail[email]
           if (!prev || roleRank(u.role) > roleRank(prev.role)) {
-            byEmail[email] = { ...u, _key: u.id, _sinLogin: false }
+            byEmail[email] = { ...u, _key: u.id, _sinLogin: false, _isSuperAdmin: isSA, role: isSA ? "superadmin" : (u.role || "member") }
           }
         })
 
         // Luego companeros — semilleroId de aquí es AUTORIDAD (viene de la query por equipo)
+        // También indexar por uid para compañeros sin email registrado
+        const byUid = {}
         allCompaneros.forEach(c => {
           const email = (c.email || c.correo || "").toLowerCase()
-          if (!email || SUPER_ADMIN_EMAILS.includes(email)) return
+          const isSA = email && SUPER_ADMIN_EMAILS.includes(email)
+
+          // Compañero sin email: usar uid como clave si tiene, o cid como último recurso
+          if (!email) {
+            const key = c.uid ? `uid_${c.uid}` : `cid_${c._cid}`
+            if (!byUid[key]) {
+              byUid[key] = {
+                _key:        c.uid || `cid_${c._cid}`,
+                id:          c.uid || `cid_${c._cid}`,
+                _cid:        c._cid,
+                email:       c.uid && uidToUsuario[c.uid]?.email ? uidToUsuario[c.uid].email.toLowerCase() : "",
+                nombre:      c.nombre || "",
+                role:        c.uid && uidToUsuario[c.uid] ? (uidToUsuario[c.uid].role || "member") : "member",
+                semilleroId: c.semilleroId,
+                _sinLogin:   !c.uid,
+                _isSuperAdmin: false,
+              }
+            }
+            return
+          }
 
           if (!byEmail[email]) {
             byEmail[email] = {
@@ -85,13 +109,15 @@ export default function GestionarUsuarios({ semilleros = [] }) {
               _cid:        c._cid,
               email,
               nombre:      c.nombre || "",
-              role:        "member",
+              role:        isSA ? "superadmin" : (c.uid && uidToUsuario[c.uid] ? (uidToUsuario[c.uid].role || "member") : (c.rolAsignado || "member")),
               semilleroId: c.semilleroId,
               _sinLogin:   !c.uid,
+              _isSuperAdmin: isSA,
             }
           } else {
             if (!byEmail[email]._cid)   byEmail[email]._cid   = c._cid
             if (!byEmail[email].nombre) byEmail[email].nombre = c.nombre || ""
+            if (isSA) byEmail[email]._isSuperAdmin = true
             // Preferir siempre un semilleroId concreto sobre null
             if (c.semilleroId && !byEmail[email].semilleroId)
               byEmail[email].semilleroId = c.semilleroId
@@ -99,12 +125,26 @@ export default function GestionarUsuarios({ semilleros = [] }) {
               byEmail[email].id        = c.uid
               byEmail[email]._key      = c.uid
               byEmail[email]._sinLogin = false
-              // El role SIEMPRE viene del doc de usuarios que coincide con el uid de companeros
-              // (evita que un doc duplicado/antiguo con el mismo email sobreescriba el role correcto)
-              if (uidToUsuario[c.uid]) {
+              if (isSA) {
+                byEmail[email].role = "superadmin"
+              } else if (uidToUsuario[c.uid]) {
                 byEmail[email].role = uidToUsuario[c.uid].role || "member"
               }
+            } else if (!isSA && c.rolAsignado) {
+              // Sin login: usar rol anticipado guardado en el companion
+              byEmail[email].role = c.rolAsignado
             }
+          }
+        })
+
+        // Fusionar compañeros sin email; evitar duplicados por _cid o uid ya presentes
+        const knownCids = new Set(Object.values(byEmail).filter(e => e._cid).map(e => e._cid))
+        const knownUids = new Set(Object.values(byEmail).filter(e => e.id && !e.id.startsWith("cid_")).map(e => e.id))
+        Object.values(byUid).forEach(u => {
+          if (u.email && byEmail[u.email]) {
+            if (!byEmail[u.email]._cid) byEmail[u.email]._cid = u._cid
+          } else if (!knownCids.has(u._cid) && !(u.id && knownUids.has(u.id))) {
+            byEmail[u._key] = u
           }
         })
 
@@ -141,7 +181,11 @@ export default function GestionarUsuarios({ semilleros = [] }) {
       const sid = u.semilleroId || "__sin"
       if (!map[sid]) {
         const sem = semilleros.find(s => s.id === sid)
-        map[sid] = { id: sid, nombre: sem?.nombre || "Sin equipo", members: [] }
+        const coordUid = sem?.coordinadores?.[0]
+        const coordUser = (coordUid ? users.find(u => u.id === coordUid) : null)
+          || filtered.find(u => u.semilleroId === sid && u.role === "admin")
+        const coordName = coordUser?.nombre || coordUser?.email?.split("@")[0] || null
+        map[sid] = { id: sid, nombre: sem?.nombre || "Sin equipo", coordName, members: [] }
       }
       map[sid].members.push(u)
     })
@@ -150,7 +194,7 @@ export default function GestionarUsuarios({ semilleros = [] }) {
       ...semilleros.filter(s => map[s.id]).map(s => map[s.id]),
       ...(map["__sin"] ? [map["__sin"]] : []),
     ]
-  }, [filtered, groupView, semilleros])
+  }, [filtered, groupView, semilleros, users])
 
   /* ── Selección ───────────────────────────────────────────────────── */
   const toggleSelect = (key) => setSelected(prev => {
@@ -182,17 +226,29 @@ export default function GestionarUsuarios({ semilleros = [] }) {
       const emailChanged = u._sinLogin && newEmail && newEmail !== u.email
       if (emailChanged) companeroUpdate.email = newEmail
       if (newSemilleroId !== (u.semilleroId || null)) companeroUpdate.semilleroId = newSemilleroId
+      // Para sin-login: guardar rol anticipado en companion para que se aplique en su primer login
+      if (u._sinLogin) companeroUpdate.rolAsignado = f.role
       if (u._cid && Object.keys(companeroUpdate).length > 0) {
         await updateDoc(doc(db, "companeros", u._cid), companeroUpdate)
       }
 
-      // 2. Actualizar rol
-      console.log(`[handleSave] uid=${u.id} _sinLogin=${u._sinLogin} role=${f.role} semilleroId=${newSemilleroId}`)
+      // 2. Actualizar rol (usuarios con UID)
       if (!u._sinLogin && !u.id.startsWith("cid_")) {
         await setUsuarioRole(u.id, f.role, newSemilleroId)
-        console.log("[handleSave] rol guardado en Firestore")
-      } else {
-        console.warn("[handleSave] OMITIDO — usuario sin login o id tipo cid_")
+
+        // 3. Sincronizar campo coordinadores del semillero
+        const semRef     = newSemilleroId                              ? doc(db, "semilleros", newSemilleroId)  : null
+        const prevSemRef = u.semilleroId && u.semilleroId !== newSemilleroId ? doc(db, "semilleros", u.semilleroId) : null
+        if (f.role === "admin" && semRef) {
+          await updateDoc(semRef, { coordinadores: arrayUnion(u.id) }).catch(() => {})
+        }
+        if (u.role === "admin") {
+          if (prevSemRef) {
+            await updateDoc(prevSemRef, { coordinadores: arrayRemove(u.id) }).catch(() => {})
+          } else if (f.role !== "admin" && semRef) {
+            await updateDoc(semRef, { coordinadores: arrayRemove(u.id) }).catch(() => {})
+          }
+        }
       }
 
       setUsers(prev => prev.map(x =>
@@ -312,6 +368,12 @@ export default function GestionarUsuarios({ semilleros = [] }) {
                   <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
                     {group.nombre}
                   </span>
+                  {group.coordName && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                      style={{ background: "oklch(0.52 0.13 165 / 0.10)", color: "oklch(0.40 0.13 165)" }}>
+                      Coordinador: {group.coordName}
+                    </span>
+                  )}
                   <span className="text-[10px] text-muted-foreground/60">{group.members.length} personas</span>
                 </div>
               )}
@@ -335,7 +397,10 @@ export default function GestionarUsuarios({ semilleros = [] }) {
                           : <div className="w-3.5 flex-shrink-0" />
                         }
 
-                        {/* Avatar */}
+                        {/* Avatar + Info — clickeable si tiene perfil */}
+                        <div
+                          className={`flex items-center gap-2.5 flex-1 min-w-0${u._cid && u.semilleroId ? " cursor-pointer group" : ""}`}
+                          onClick={() => u._cid && u.semilleroId && navigate(`/semillero/${u.semilleroId}/colleague/${u._cid}`)}>
                         <div className="w-8 h-8 rounded-xl flex items-center justify-center text-white text-[12px] font-bold flex-shrink-0"
                           style={{ background: "linear-gradient(135deg, oklch(0.62 0.18 165), oklch(0.54 0.22 205))" }}>
                           {u.nombre?.charAt(0)?.toUpperCase() || u.email?.charAt(0)?.toUpperCase() || "?"}
@@ -344,7 +409,7 @@ export default function GestionarUsuarios({ semilleros = [] }) {
                         {/* Info */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-[12.5px] font-semibold text-foreground truncate">{u.nombre || u.email}</span>
+                            <span className="text-[12.5px] font-semibold text-foreground truncate group-hover:underline">{u.nombre || u.email}</span>
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
                               style={{ background: roleStyle.bg, color: roleStyle.color }}>
                               {ROLE_LABELS[u.role] || "Miembro"}
@@ -358,10 +423,12 @@ export default function GestionarUsuarios({ semilleros = [] }) {
                           </div>
                           <p className="text-[11px] text-muted-foreground truncate">{u.email}</p>
                         </div>
+                        </div>{/* /clickeable wrapper */}
 
                         {/* Acciones */}
                         {!isEditing && !hasSelection && (
                           <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {u._isSuperAdmin && u.email === user?.email?.toLowerCase() ? null : (<>
                             <button onClick={() => { setEditingKey(u._key); setEditForm({ role: u.role || "member", semilleroId: u.semilleroId || "", email: u.email || "" }) }}
                               className="text-[11px] font-semibold px-2.5 py-1 rounded-lg border border-border hover:bg-muted transition-colors"
                               style={{ color: "var(--foreground)" }}>
@@ -372,6 +439,7 @@ export default function GestionarUsuarios({ semilleros = [] }) {
                               style={{ color: "var(--destructive)" }}>
                               Eliminar
                             </button>
+                            </>)}
                           </div>
                         )}
                         {!isEditing && hasSelection && !canEdit && (
@@ -394,16 +462,15 @@ export default function GestionarUsuarios({ semilleros = [] }) {
                               <p className="text-[9px] text-muted-foreground/60">Corrige si no coincide con su cuenta Google</p>
                             </div>
                           )}
-                          {canEdit && (
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Rol</label>
-                              <select value={editForm.role} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))}
-                                className="h-8 rounded-lg border border-border bg-background text-[12px] text-foreground px-2 focus:outline-none">
-                                <option value="member">Miembro</option>
-                                <option value="admin">Coordinador</option>
-                              </select>
-                            </div>
-                          )}
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Rol</label>
+                            <select value={editForm.role} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))}
+                              className="h-8 rounded-lg border border-border bg-background text-[12px] text-foreground px-2 focus:outline-none">
+                              <option value="member">Miembro</option>
+                              <option value="admin">Coordinador</option>
+                              <option value="superadmin">Super Admin</option>
+                            </select>
+                          </div>
                           <div className="space-y-1">
                             <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Equipo</label>
                             <select value={editForm.semilleroId} onChange={e => setEditForm(f => ({ ...f, semilleroId: e.target.value }))}
@@ -570,7 +637,7 @@ export default function GestionarUsuarios({ semilleros = [] }) {
       )}
 
       <p className="text-[11px] text-muted-foreground/50 text-center flex-shrink-0">
-        Los Super Admin fijos no aparecen aquí. "Sin login" = aún no han ingresado por primera vez.
+        "Sin login" = aún no han ingresado por primera vez.
       </p>
     </div>
   )

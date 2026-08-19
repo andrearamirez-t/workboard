@@ -13,8 +13,6 @@ const firebaseConfig = {
 }
 
 
-console.log("PROJECT:", firebaseConfig.projectId)
-
 const app = initializeApp(firebaseConfig)
 
 export const auth = getAuth(app)

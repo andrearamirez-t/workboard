@@ -8,6 +8,7 @@ import { db } from "@/services/firebase"
 const ICONS = {
   tarea_asignada:      "📋",
   tarea_grupo:         "📋",
+  tarea_vencimiento:   "⏰",
   feedback_grupo:      "💬",
   feedback_recibido:   "💬",
   proyecto_agregado:   "🗂️",

@@ -816,6 +816,7 @@ export default function GroupDetail() {
           </div>
           <div className="flex border-t border-border/40 px-1 overflow-x-auto">
             {[
+              ...(isAdmin ? [{ key: "resumen", label: "Resumen", count: 0 }] : []),
               { key: "proyectos", label: "Proyectos", count: grupo.proyectos?.length || 0 },
               { key: "bitacora", label: "Bitácora", count: logs.length },
               { key: "tareas", label: "Tareas", count: tareasPendientes.length },
@@ -843,6 +844,134 @@ export default function GroupDetail() {
 
         <main className="flex-1 px-6 py-6 space-y-5">
 
+          {activeTab === "resumen" && isAdmin && (() => {
+            const proyAll = grupo.proyectos || []
+            const today = new Date().toISOString().slice(0, 10)
+            const tareasVencidas = tasks.filter(t => t.estado !== "Hecho" && t.fechaLimite && t.fechaLimite < today)
+            const avgAvance = proyAll.length > 0
+              ? Math.round(proyAll.reduce((s, p) => s + (Number(p.avance) || 0), 0) / proyAll.length)
+              : 0
+            const byEstado = ESTADOS.map(est => ({
+              est, color: STATE_COLOR[est] || "180",
+              count: proyAll.filter(p => p.estado === est).length,
+            })).filter(x => x.count > 0)
+            const recentLogs = [...logs].slice(0, 5)
+            const statCards = [
+              { label: "Miembros", value: miembros.length, color: hue, sub: "en el grupo" },
+              { label: "Proyectos", value: proyAll.length, color: "145", sub: `${proyAll.filter(p => p.estado === "Finalizado" || p.estado === "Entregado").length} finalizados` },
+              { label: "Tareas pendientes", value: tareasPendientes.length, color: tareasVencidas.length > 0 ? "27" : "55", sub: tareasVencidas.length > 0 ? `${tareasVencidas.length} vencida${tareasVencidas.length !== 1 ? "s" : ""}` : "al día" },
+              { label: "Completadas", value: tareasHechas.length, color: "165", sub: `de ${tasks.length} tareas` },
+            ]
+            return (
+              <div className="space-y-5">
+                <h2 className="text-[18px] font-bold text-foreground tracking-tight">Resumen del grupo</h2>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  {statCards.map(s => (
+                    <div key={s.label} className="bg-card border border-border rounded-2xl p-4 space-y-1"
+                      style={{ borderTop: `3px solid oklch(0.62 0.20 ${s.color})` }}>
+                      <p className="text-[28px] font-black text-foreground leading-none">{s.value}</p>
+                      <p className="text-[12px] font-semibold text-foreground">{s.label}</p>
+                      <p className="text-[11px] text-muted-foreground">{s.sub}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {proyAll.length > 0 && (
+                  <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
+                    <p className="text-[13px] font-bold text-foreground">Proyectos</p>
+                    <div>
+                      <div className="flex justify-between text-[11px] text-muted-foreground mb-1.5">
+                        <span>Avance promedio</span>
+                        <span className="font-semibold text-foreground">{avgAvance}%</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full rounded-full transition-all"
+                          style={{ width: `${avgAvance}%`, background: `oklch(0.55 0.18 ${hue})` }} />
+                      </div>
+                    </div>
+                    {byEstado.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {byEstado.map(x => (
+                          <div key={x.est} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium"
+                            style={{ background: `oklch(0.62 0.18 ${x.color} / 0.12)`, color: `oklch(0.45 0.18 ${x.color})` }}>
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: `oklch(0.60 0.20 ${x.color})` }} />
+                            {x.est} · {x.count}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      {proyAll.slice(0, 5).map((p, i) => (
+                        <div key={i} className="flex items-center gap-3">
+                          <p className="text-[12px] text-foreground truncate flex-1">{p.nombre}</p>
+                          <span className="text-[11px] text-muted-foreground flex-shrink-0 w-8 text-right">{Number(p.avance) || 0}%</span>
+                          <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden flex-shrink-0">
+                            <div className="h-full rounded-full" style={{ width: `${Number(p.avance) || 0}%`, background: `oklch(0.55 0.18 ${STATE_COLOR[p.estado] || hue})` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {tasks.length > 0 && (
+                  <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
+                    <p className="text-[13px] font-bold text-foreground">Tareas</p>
+                    <div className="flex gap-3">
+                      <div className="flex-1 rounded-xl p-3 text-center" style={{ background: "oklch(0.55 0.18 145 / 0.10)" }}>
+                        <p className="text-[22px] font-black" style={{ color: "oklch(0.48 0.18 145)" }}>{tareasHechas.length}</p>
+                        <p className="text-[11px] text-muted-foreground">Completadas</p>
+                      </div>
+                      <div className="flex-1 rounded-xl p-3 text-center" style={{ background: "oklch(0.55 0.18 55 / 0.10)" }}>
+                        <p className="text-[22px] font-black" style={{ color: "oklch(0.50 0.18 55)" }}>{tareasPendientes.length}</p>
+                        <p className="text-[11px] text-muted-foreground">Pendientes</p>
+                      </div>
+                      {tareasVencidas.length > 0 && (
+                        <div className="flex-1 rounded-xl p-3 text-center" style={{ background: "oklch(0.55 0.18 27 / 0.10)" }}>
+                          <p className="text-[22px] font-black" style={{ color: "oklch(0.50 0.20 27)" }}>{tareasVencidas.length}</p>
+                          <p className="text-[11px] text-muted-foreground">Vencidas</p>
+                        </div>
+                      )}
+                    </div>
+                    {tasks.length > 0 && (
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full rounded-full transition-all"
+                          style={{ width: `${Math.round(tareasHechas.length / tasks.length * 100)}%`, background: "oklch(0.55 0.18 145)" }} />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {recentLogs.length > 0 && (
+                  <div className="bg-card border border-border rounded-2xl p-5 space-y-3">
+                    <p className="text-[13px] font-bold text-foreground">Actividad reciente</p>
+                    <div className="space-y-2">
+                      {recentLogs.map((l, i) => (
+                        <div key={i} className="flex gap-3 items-start py-2 border-b border-border/40 last:border-0">
+                          <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-[10px] font-bold text-white mt-0.5"
+                            style={{ background: `oklch(0.62 0.18 ${hue})` }}>
+                            {(l.autor || "?").charAt(0).toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[12px] text-foreground line-clamp-2">{l.nota}</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">{l.autor}{l.fecha ? ` · ${new Date(l.fecha?.seconds ? l.fecha.seconds * 1000 : l.fecha).toLocaleDateString("es-CO", { day: "numeric", month: "short" })}` : ""}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {proyAll.length === 0 && tasks.length === 0 && logs.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-16 text-center">
+                    <p className="text-[14px] font-medium text-muted-foreground">Sin actividad registrada aún.</p>
+                    <p className="text-[12px] text-muted-foreground mt-1">Agrega proyectos, tareas o notas para ver el resumen.</p>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+
           {activeTab === "proyectos" && (<>
             <div className="flex justify-between items-center">
               <h2 className="text-[18px] font-bold text-foreground tracking-tight">
@@ -861,21 +990,46 @@ export default function GroupDetail() {
                 <p className="text-[13px] font-semibold text-foreground">{editingProject ? "Editar proyecto" : "Nuevo proyecto"}</p>
                 <input ref={pdfInputRef} type="file" accept="application/pdf" className="hidden" onChange={handlePdfImport} />
                 {!editingProject && (
-                  <div className="rounded-xl border border-border bg-card p-4">
-                    <div className="flex items-start gap-3">
+                  <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+                    <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-base"
                         style={{ background: "oklch(0.55 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>⬆</div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[13px] font-semibold text-foreground">Importar desde PDF de propuesta</p>
-                        <p className="text-[11px] text-muted-foreground mt-0.5">Sube el PDF del Asistente de Propuestas CUN y los campos se llenarán automáticamente.</p>
-                        {pdfError && <p className="text-[11px] text-destructive mt-1">{pdfError}</p>}
-                        {pdfImported && <p className="text-[11px] mt-1 font-medium" style={{ color: "oklch(0.55 0.18 145)" }}>✓ Datos importados. Revisa y ajusta si es necesario.</p>}
-                      </div>
-                      <button type="button" onClick={() => pdfInputRef.current?.click()} disabled={pdfLoading}
-                        className="flex-shrink-0 text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-border text-foreground hover:border-primary/40 hover:bg-muted/60 disabled:opacity-50 transition-all">
-                        {pdfLoading ? "Leyendo…" : "Seleccionar PDF"}
-                      </button>
+                      <p className="text-[13px] font-semibold text-foreground">Importar desde PDF de propuesta</p>
                     </div>
+                    <div className="rounded-lg p-3 space-y-2" style={{ background: "oklch(0.55 0.18 260 / 0.06)", border: "1px solid oklch(0.55 0.18 260 / 0.15)" }}>
+                      <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: "oklch(0.50 0.18 260)" }}>Cómo hacerlo</p>
+                      {[
+                        { n: "1", text: "Ingresa al Asistente de Propuestas", link: "https://plataforma-investigaciones-vgpt.web.app/dashboard" },
+                        { n: "2", text: "Genera el PDF de tu propuesta allí" },
+                        { n: "3", text: "Descárgalo y súbelo aquí con el botón de abajo" },
+                      ].map(step => (
+                        <div key={step.n} className="flex items-start gap-2">
+                          <span className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-black flex-shrink-0 mt-0.5"
+                            style={{ background: "oklch(0.55 0.18 260)" }}>
+                            {step.n}
+                          </span>
+                          {step.link ? (
+                            <a href={step.link} target="_blank" rel="noopener noreferrer"
+                              className="text-[11px] font-semibold inline-flex items-center gap-1 transition-opacity hover:opacity-70"
+                              style={{ color: "oklch(0.50 0.18 260)" }}>
+                              {step.text}
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                              </svg>
+                            </a>
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">{step.text}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {pdfError && <p className="text-[11px] text-destructive">{pdfError}</p>}
+                    {pdfImported && <p className="text-[11px] font-medium" style={{ color: "oklch(0.55 0.18 145)" }}>✓ Datos importados. Revisa y ajusta si es necesario.</p>}
+                    <button type="button" onClick={() => pdfInputRef.current?.click()} disabled={pdfLoading}
+                      className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg border transition-all disabled:opacity-50"
+                      style={{ borderColor: "oklch(0.55 0.18 260 / 0.35)", color: "oklch(0.50 0.18 260)", background: "oklch(0.55 0.18 260 / 0.07)" }}>
+                      {pdfLoading ? "Leyendo…" : "⬆ Seleccionar PDF"}
+                    </button>
                   </div>
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

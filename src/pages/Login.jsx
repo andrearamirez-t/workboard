@@ -75,7 +75,7 @@ export default function Login() {
               </div>
               <div>
                 <h1 className="text-[26px] font-bold tracking-tight text-foreground">Workboard</h1>
-                <p className="text-[13px] text-muted-foreground mt-0.5">Investigación e innovación · CUN</p>
+                <p className="text-[13px] text-muted-foreground mt-0.5">Gestión de equipos</p>
               </div>
             </div>
 

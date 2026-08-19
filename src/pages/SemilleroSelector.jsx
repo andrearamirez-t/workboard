@@ -152,11 +152,11 @@ export default function SemilleroSelector() {
             )}
             <p className="text-[11px] font-semibold uppercase tracking-widest mb-1"
               style={{ color: "oklch(1 0 0 / 0.55)" }}>
-              Workboard · CUN Investigación
+              Workboard
             </p>
             <h1 className="text-[28px] font-black text-white leading-tight">Gestionar equipos</h1>
             <p className="text-[13px] mt-1" style={{ color: "oklch(1 0 0 / 0.65)" }}>
-              Crea, edita o elimina los equipos de investigación
+              Crea, edita o elimina los equipos de trabajo
             </p>
           </div>
 

@@ -618,7 +618,7 @@ export default function ColleagueDetail() {
               style={{ color: "var(--foreground)" }}>
               Editar perfil
             </button>
-            {isSuperAdmin && (
+            {isAdmin && (
               <button onClick={handleDelete}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-colors hover:bg-muted/40 text-left"
                 style={{ color: "var(--destructive)" }}>

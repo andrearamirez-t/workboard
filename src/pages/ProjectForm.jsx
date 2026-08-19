@@ -249,35 +249,62 @@ export default function ProjectForm() {
       <div className="max-w-2xl mx-auto px-6 py-8 w-full">
 
         {/* ── Importar desde PDF ── */}
-        <div className="rounded-2xl border border-border bg-card p-5 mb-6">
-          <div className="flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-lg"
+        <div className="rounded-2xl border border-border bg-card p-5 mb-6 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-base"
               style={{ background: "oklch(0.55 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>
               ⬆
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[14px] font-semibold text-foreground">Importar desde PDF de propuesta</p>
-              <p className="text-[12px] text-muted-foreground mt-0.5">
-                Sube el PDF generado en el Asistente de Propuestas CUN y los campos se llenarán automáticamente.
-              </p>
-              {pdfError && (
-                <p className="text-[12px] text-destructive mt-1.5">{pdfError}</p>
-              )}
-              {pdfImported && (
-                <p className="text-[12px] mt-1.5 font-medium" style={{ color: "oklch(0.55 0.18 145)" }}>
-                  ✓ Datos importados correctamente. Revisa y ajusta si es necesario.
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => pdfInputRef.current?.click()}
-              disabled={pdfLoading}
-              className="flex-shrink-0 text-[12px] font-semibold px-4 py-2 rounded-xl border border-border text-foreground hover:border-primary/40 hover:bg-muted/60 disabled:opacity-50 transition-all"
-            >
-              {pdfLoading ? "Leyendo…" : "Seleccionar PDF"}
-            </button>
+            <p className="text-[14px] font-semibold text-foreground">Importar desde PDF de propuesta</p>
           </div>
+
+          {/* Pasos */}
+          <div className="rounded-xl p-3 space-y-2" style={{ background: "oklch(0.55 0.18 260 / 0.06)", border: "1px solid oklch(0.55 0.18 260 / 0.15)" }}>
+            <p className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: "oklch(0.50 0.18 260)" }}>Cómo hacerlo</p>
+            {[
+              { n: "1", text: "Ingresa al Asistente de Propuestas", link: "https://plataforma-investigaciones-vgpt.web.app/dashboard" },
+              { n: "2", text: "Genera el PDF de tu propuesta allí" },
+              { n: "3", text: "Descárgalo y súbelo aquí con el botón de abajo" },
+            ].map(step => (
+              <div key={step.n} className="flex items-start gap-2">
+                <span className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-black flex-shrink-0 mt-0.5"
+                  style={{ background: "oklch(0.55 0.18 260)" }}>
+                  {step.n}
+                </span>
+                {step.link ? (
+                  <a href={step.link} target="_blank" rel="noopener noreferrer"
+                    className="text-[12px] font-semibold inline-flex items-center gap-1 transition-opacity hover:opacity-70"
+                    style={{ color: "oklch(0.50 0.18 260)" }}>
+                    {step.text}
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                    </svg>
+                  </a>
+                ) : (
+                  <span className="text-[12px] text-muted-foreground">{step.text}</span>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {pdfError && (
+            <p className="text-[12px] text-destructive">{pdfError}</p>
+          )}
+          {pdfImported && (
+            <p className="text-[12px] font-medium" style={{ color: "oklch(0.55 0.18 145)" }}>
+              ✓ Datos importados correctamente. Revisa y ajusta si es necesario.
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={() => pdfInputRef.current?.click()}
+            disabled={pdfLoading}
+            className="w-full text-[13px] font-semibold px-4 py-2.5 rounded-xl border transition-all disabled:opacity-50"
+            style={{ borderColor: "oklch(0.55 0.18 260 / 0.35)", color: "oklch(0.50 0.18 260)", background: "oklch(0.55 0.18 260 / 0.07)" }}
+          >
+            {pdfLoading ? "Leyendo…" : "⬆ Seleccionar PDF"}
+          </button>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">

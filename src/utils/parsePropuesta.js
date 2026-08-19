@@ -39,18 +39,36 @@ function dmyToIso(d, m, y) {
 // Texto que indica que el campo es una plantilla sin llenar
 const TEMPLATE_PHRASES = [
   "debe redactarse",
-  "máximo 200",
-  "máximo 300",
-  "máximo 500",
-  "escriba aquí",
-  "ingrese aquí",
-  "describa aquí",
+  "máximo 200", "máximo 300", "máximo 500", "máximo 1000", "máximo 1500",
+  "escriba aquí", "ingrese aquí", "describa aquí",
   "a continuación",
+  // Subtítulos de instrucción del formato CUN
+  "sintética del", "propósito, pertinencia", "pertinencia, viabilidad",
+  "originalidad de la investigación",
+  "describa brevemente", "describa de manera", "en este apartado",
 ]
 
 function isTemplate(str) {
   const lower = str.toLowerCase()
   return TEMPLATE_PHRASES.some(p => lower.includes(p))
+}
+
+// Elimina oraciones de instrucción al inicio de un bloque de texto capturado
+function skipTemplateLines(raw) {
+  return raw
+    .split(/\.\s+|\n+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 5 && !isTemplate(s))
+    .join(". ")
+    .trim()
+}
+
+// Corta en el último punto completo antes de maxChars para no dejar oraciones a medias
+function cutAtSentence(text, maxChars = 350) {
+  if (text.length <= maxChars) return text
+  const chunk = text.slice(0, maxChars)
+  const last = Math.max(chunk.lastIndexOf(". "), chunk.lastIndexOf("! "), chunk.lastIndexOf("? "))
+  return last > 40 ? text.slice(0, last + 1).trim() : chunk.trim()
 }
 
 const TECH_KEYWORDS = [
@@ -128,18 +146,34 @@ export function parseCunPdf(rawText) {
   }
 
   // ── Resumen → queHace ────────────────────────────────────────────────────
+  // Nota: text tiene todo en una sola línea (whitespace colapsado), así que
+  // los look-aheads usan secciones conocidas del PDF CUN como delimitadores.
+  const NEXT_SECTION = /OBJETIVOS|JUSTIFIC|ALCANCE|METODOLOG|CRONOGRAMA|PRESUPUESTO|PALABRAS\s+CLAVE|INTRODUC|2\s*[.–-]/i
   const resPatterns = [
-    /1\s*[.–-]\s*Resumen[:\s]+(.{50,800}?)(?=\s*2\s*[.–-]|\s*Ejes|$)/i,
-    /RESUMEN[:\s]+(.{50,800}?)(?=\s*(?:OBJETIVOS|2\.|PALABRAS|$))/i,
-    // Fallback: buscar en justificación u objetivo general si Resumen está vacío
-    /[Jj]ustificaci[oó]n[:\s]+(.{80,600}?)(?=\s*(?:Alcance|Objetivo|$))/i,
-    /[Oo]bjetivo\s+[Gg]eneral[:\s]+(.{30,300}?)(?=\s*(?:[Oo]bjetivos\s+[Ee]specíficos|$))/i,
+    // "1. Resumen" o "1- Resumen" con número de sección
+    /1\s*[.–-]\s*Resumen[:\s]+(.{30,800}?)(?=\s*(?:2\s*[.–-]|Ejes|OBJETIVOS|PALABRAS|JUSTIFIC))/i,
+    // RESUMEN en mayúsculas (formato tabla CUN)
+    /RESUMEN[:\s]+(.{30,800}?)(?=\s*(?:OBJETIVOS|2\.|PALABRAS|JUSTIFIC|INTRODUC|ALCANCE|METODOLOG))/i,
+    // "Resumen:" sin sección siguiente conocida → captura hasta 600 chars
+    /[Rr]esumen[:\s]+(.{30,600})/i,
+    // Descripción del proyecto
+    /[Dd]escripci[oó]n\s*(?:del\s+proyecto)?[:\s]+(.{30,500}?)(?=\s*(?:OBJETIVO|Alcance|Estado|HERR|$))/i,
+    // Justificación
+    /[Jj]ustificaci[oó]n[:\s]+(.{30,500}?)(?=\s*(?:Alcance|Objetivo|METODOLOG|ALCANCE))/i,
+    // Objetivo general
+    /[Oo]bjetivo\s+[Gg]eneral[:\s]+(.{20,300}?)(?=\s*(?:[Oo]bjetivos\s+[Ee]spec|METODOLOG|CRONOGRAMA))/i,
   ]
   for (const p of resPatterns) {
     const m = text.match(p)
-    if (m && m[1].trim().length > 30 && !isTemplate(m[1])) {
-      result.queHace = m[1].trim().slice(0, 500)
-      break
+    if (m) {
+      // Cortar en la primera sección siguiente si el patrón capturó de más
+      const raw = m[1].replace(NEXT_SECTION, "").trim()
+      // Eliminar oraciones de instrucción y quedarse con el contenido real
+      const cleaned = skipTemplateLines(raw)
+      if (cleaned.length > 20) {
+        result.queHace = cutAtSentence(cleaned, 350)
+        break
+      }
     }
   }
 
@@ -152,9 +186,11 @@ export function parseCunPdf(rawText) {
   for (const p of areaPatterns) {
     const m = text.match(p)
     if (m) {
-      const candidate = m[1].trim()
-      if (!/VERSI[ÓO]N|P[ÁA]GINA|INV-FO/i.test(candidate) && !isTemplate(candidate)) {
-        result.area = candidate.slice(0, 100)
+      const candidate = skipTemplateLines(m[1]).replace(/,\s*$/, "").trim()
+      if (candidate.length >= 5 && !/VERSI[ÓO]N|P[ÁA]GINA|INV-FO/i.test(candidate)) {
+        // Tomar solo el primer ítem si hay una lista separada por comas o punto y coma
+        const firstItem = candidate.split(/[;,]\s+/)[0].trim()
+        result.area = (firstItem.length >= 5 ? firstItem : candidate).slice(0, 100)
         break
       }
     }

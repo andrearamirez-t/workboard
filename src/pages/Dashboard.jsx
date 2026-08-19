@@ -20,7 +20,9 @@ import { TeamDashboard } from "@/components/ui/TeamDashboard"
 import { getEquiposBySemillero, createEquipo, updateEquipo, deleteEquipo } from "@/services/equipos.service"
 import { queueGrupoNotification, queueParticipanteGrupoNotification } from "@/services/wpp.service"
 import { crearNotificacionUsuario } from "@/services/notificaciones.service"
-import { importGroupContacts, getGroupContactsCount } from "@/services/groups.service"
+import { importGroupContacts, getGroupContactsCount, getGrupoTasks } from "@/services/groups.service"
+import { getTasks } from "@/services/tasks.service"
+import { getAdminsBySemillero } from "@/services/usuarios.service"
 import { parseContactsFile } from "@/utils/parseContactsFile"
 
 
@@ -153,6 +155,7 @@ export default function Dashboard() {
   const [participantCounts, setParticipantCounts] = useState({})
 
   const contactsInputRef = useRef(null)
+  const deadlineCheckDoneRef = useRef(false)
   const importingEquipoIdRef = useRef(null)
   const [importPreview, setImportPreview] = useState(null)
   const [importingEquipoId, setImportingEquipoId] = useState(null)
@@ -160,10 +163,12 @@ export default function Dashboard() {
   const [importError, setImportError] = useState("")
   const [importSaving, setImportSaving] = useState(false)
   const [importSuccessCount, setImportSuccessCount] = useState(null)
+  const [teamCoordUids, setTeamCoordUids] = useState([])
 
   useEffect(() => {
     if (!semilleroId) return
     getSemillero(semilleroId).then(s => setSemillero(s)).catch(() => {})
+    getAdminsBySemillero(semilleroId).then(us => setTeamCoordUids(us.map(u => u.id))).catch(() => {})
   }, [semilleroId])
 
   useEffect(() => {
@@ -187,6 +192,79 @@ export default function Dashboard() {
     document.addEventListener("click", handler)
     return () => document.removeEventListener("click", handler)
   }, [openCardMenu])
+
+  // Alerta 2 días antes del vencimiento de tareas individuales y de grupo
+  useEffect(() => {
+    if (!user?.uid || !myColleagueId || !semilleroId || loadingData || deadlineCheckDoneRef.current) return
+    deadlineCheckDoneRef.current = true
+
+    const today = new Date()
+    const toStr = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`
+    const alertDate = toStr(today)
+    const d1 = new Date(today); d1.setDate(today.getDate() + 1)
+    const d2 = new Date(today); d2.setDate(today.getDate() + 2)
+    // Mapa fecha → título de alerta (el cheque corre cada día, así que cada día aplica el título correspondiente)
+    const ALERT_DATES = {
+      [toStr(today)]: "¡Tarea vence hoy!",
+      [toStr(d1)]:    "Tarea vence mañana",
+      [toStr(d2)]:    "Tarea próxima a vencer",
+    }
+    const STORAGE_KEY = `wb_deadline_alerts_${user.uid}_${alertDate}`
+    const alreadyNotified = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"))
+
+    async function checkDeadlines() {
+      const newKeys = []
+
+      try {
+        const tasks = await getTasks(myColleagueId)
+        for (const t of tasks) {
+          if (!t.fechaLimite || t.estado === "Hecho" || t.avance >= 100) continue
+          if (!ALERT_DATES[t.fechaLimite]) continue
+          const key = `ind_${t.id}`
+          if (alreadyNotified.has(key)) continue
+          await crearNotificacionUsuario({
+            toUid: user.uid,
+            tipo: "tarea_vencimiento",
+            titulo: ALERT_DATES[t.fechaLimite],
+            subtitulo: t.titulo,
+            path: `/semillero/${semilleroId}/colleague/${myColleagueId}`,
+            semilleroId,
+          }).catch(() => {})
+          newKeys.push(key)
+        }
+      } catch {}
+
+      const myGrupos = equipos.filter(eq =>
+        eq.memberUids?.includes(user.uid) || eq.miembros?.includes(myColleagueId)
+      )
+      for (const grupo of myGrupos) {
+        try {
+          const tasks = await getGrupoTasks(grupo.id)
+          for (const t of tasks) {
+            if (!t.fechaLimite || t.estado === "Hecho" || t.avance >= 100) continue
+            if (!ALERT_DATES[t.fechaLimite]) continue
+            const key = `grp_${grupo.id}_${t.id}`
+            if (alreadyNotified.has(key)) continue
+            await crearNotificacionUsuario({
+              toUid: user.uid,
+              tipo: "tarea_vencimiento",
+              titulo: ALERT_DATES[t.fechaLimite],
+              subtitulo: `${t.titulo} — ${grupo.nombre}`,
+              path: `/semillero/${semilleroId}/grupo/${grupo.id}`,
+              semilleroId,
+            }).catch(() => {})
+            newKeys.push(key)
+          }
+        } catch {}
+      }
+
+      if (newKeys.length > 0) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify([...alreadyNotified, ...newKeys]))
+      }
+    }
+
+    checkDeadlines()
+  }, [user?.uid, myColleagueId, semilleroId, loadingData])
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   const reloadEquipos = () => getEquiposBySemillero(semilleroId).then(eqs => {
@@ -430,7 +508,7 @@ export default function Dashboard() {
         <div className="min-w-0">
           <p className="text-[14px] font-bold text-foreground leading-none">Workboard</p>
           <p className="text-[10px] text-muted-foreground mt-0.5 leading-none truncate">
-            {semillero?.nombre || "CUN · Investigación"}
+            {semillero?.nombre || "Mi coordinación"}
           </p>
         </div>
       </button>
@@ -659,10 +737,12 @@ export default function Dashboard() {
                     style={{ background: "radial-gradient(circle, oklch(1 0 0), transparent 70%)" }} />
                   <div className="absolute -bottom-10 -left-10 w-40 h-40 rounded-full opacity-8 pointer-events-none"
                     style={{ background: "radial-gradient(circle, oklch(0.58 0.16 295), transparent 70%)" }} />
-                  <p className="text-[11px] font-semibold uppercase tracking-widest mb-1.5"
-                    style={{ color: "oklch(1 0 0 / 0.55)" }}>
-                    Investigación e Innovación · CUN
-                  </p>
+                  {semillero?.nombre && (
+                    <p className="text-[11px] font-semibold uppercase tracking-widest mb-1.5"
+                      style={{ color: "oklch(1 0 0 / 0.55)" }}>
+                      {semillero.nombre}
+                    </p>
+                  )}
                   <h3 className="text-[24px] font-bold text-white leading-tight mb-1">
                     Hola, {userFirstName}
                   </h3>
@@ -747,6 +827,51 @@ export default function Dashboard() {
                     ))}
                   </div>
                 )}
+
+                {/* Coordinadores del equipo */}
+                {!loadingData && (() => {
+                  const allCoordUids = new Set([
+                    ...teamCoordUids,
+                    ...(semillero?.coordinadores || []),
+                  ])
+                  const coords = colleagues.filter(c =>
+                    (c.uid && allCoordUids.has(c.uid)) ||
+                    (!c.uid && c.rolAsignado === "admin")
+                  )
+                  if (coords.length === 0) return null
+                  return (
+                    <div className="rounded-2xl border overflow-hidden"
+                      style={{ borderColor: "oklch(0.52 0.13 165 / 0.25)" }}>
+                      <div className="px-4 py-2 border-b"
+                        style={{ background: "oklch(0.52 0.13 165 / 0.08)", borderColor: "oklch(0.52 0.13 165 / 0.18)" }}>
+                        <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "oklch(0.42 0.13 165)" }}>
+                          {coords.length === 1 ? "Coordinador del equipo" : "Coordinadores del equipo"}
+                        </p>
+                      </div>
+                      {coords.map(coord => {
+                        const h = coord.colorHue ?? hashHue(coord.id)
+                        const h2 = coord.colorHue2 ?? null
+                        return (
+                          <div key={coord.id} className="flex items-center gap-3 px-4 py-2.5 border-b last:border-0"
+                            style={{ background: "oklch(0.52 0.13 165 / 0.03)", borderColor: "oklch(0.52 0.13 165 / 0.12)" }}>
+                            <div className="w-8 h-8 rounded-xl flex items-center justify-center text-white text-[12px] font-bold flex-shrink-0 overflow-hidden"
+                              style={{ background: coord.avatarUrl ? "var(--muted)" : `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${h2 ?? (parseInt(h) + 40) % 360}))` }}>
+                              {coord.avatarUrl
+                                ? <img src={coord.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                : (coord.nombre?.charAt(0)?.toUpperCase() || "?")}
+                            </div>
+                            <span className="flex-1 text-[13px] font-semibold text-foreground truncate">{coord.nombre}</span>
+                            <button onClick={() => navigate(`/semillero/${semilleroId}/colleague/${coord.id}`)}
+                              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors flex-shrink-0"
+                              style={{ background: "oklch(0.52 0.13 165 / 0.12)", color: "oklch(0.40 0.13 165)" }}>
+                              Ver perfil
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
 
                 {/* Filter bar */}
                 {!loadingData && colleagues.length > 0 && (
