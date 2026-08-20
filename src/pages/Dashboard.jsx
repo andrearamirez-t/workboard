@@ -76,24 +76,44 @@ function rgbToHex(r, g, b) {
   return `#${[r, g, b].map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")}`
 }
 
-function workloadRingColor(count) {
-  if (count === 0) return "var(--border)"
-  if (count <= 2) return "oklch(0.52 0.13 165)"
-  if (count <= 4) return "oklch(0.75 0.15 80)"
+function calcWorkloadScore(proyectos = []) {
+  const today = new Date()
+  let score = 0
+  for (const p of proyectos) {
+    const avance = p.avance ?? 0
+    if (p.estado === "Hecho" || avance >= 100) continue
+    const remaining = (100 - avance) / 100
+    let urgency = 1.0
+    if (p.fechaLimite) {
+      const daysLeft = Math.ceil((new Date(p.fechaLimite) - today) / 86400000)
+      if (daysLeft < 0) urgency = 1.5
+      else if (daysLeft <= 7) urgency = 1.2
+    }
+    score += remaining * urgency
+  }
+  return score
+}
+
+function workloadRingColor(score) {
+  if (score === 0) return "var(--border)"
+  if (score < 1) return "oklch(0.52 0.13 165)"
+  if (score < 2) return "oklch(0.75 0.15 80)"
+  if (score < 3) return "oklch(0.65 0.20 40)"
   return "oklch(0.577 0.245 27.325)"
 }
 
-function workloadLabel(count) {
-  if (count === 0) return "Sin proyectos"
-  if (count <= 2) return "Disponible"
-  if (count <= 4) return "Ocupado"
-  return "Alta carga"
+function workloadLabel(score) {
+  if (score === 0) return "Libre"
+  if (score < 1) return "Disponible"
+  if (score < 2) return "Ocupado"
+  if (score < 3) return "Carga alta"
+  return "Sobrecarga"
 }
 
 function WorkloadRing({ count, size = 52, children }) {
   const r = (size / 2) - 4
   const circumference = 2 * Math.PI * r
-  const ratio = Math.min(1, count / 4)
+  const ratio = Math.min(1, count / 4)  // count = workloadScore, 4 = sobrecarga
   const dashOffset = circumference * (1 - ratio)
   const color = workloadRingColor(count)
   return (
@@ -1009,6 +1029,7 @@ export default function Dashboard() {
                       const h = c.colorHue ?? hashHue(c.id)
                       const h2 = c.colorHue2 ?? null
                       const projectCount = c.proyectos?.length || 0
+                      const workScore = calcWorkloadScore(c.proyectos)
                       const isSelected = selectedIds.has(c.id)
                       return (
                         <div key={c.id}
@@ -1111,7 +1132,7 @@ export default function Dashboard() {
 
                             {/* Avatar + Name */}
                             <div className="flex items-start gap-3">
-                              <WorkloadRing count={projectCount} size={52}>
+                              <WorkloadRing count={workScore} size={52}>
                                 <div className="w-full h-full flex items-center justify-center text-white font-bold text-[15px] overflow-hidden"
                                   style={c.avatarUrl ? { background: "var(--muted)" } : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${h2 ?? (h + 40) % 360}))` }}>
                                   {c.avatarUrl
@@ -1164,13 +1185,13 @@ export default function Dashboard() {
                                 <span className="text-[11px] text-muted-foreground">
                                   {projectCount} proyecto{projectCount !== 1 ? "s" : ""}
                                 </span>
-                                <span className="text-[10px] font-semibold" style={{ color: workloadRingColor(projectCount) }}>
-                                  {workloadLabel(projectCount)}
+                                <span className="text-[10px] font-semibold" style={{ color: workloadRingColor(workScore) }}>
+                                  {workloadLabel(workScore)}
                                 </span>
                               </div>
                               <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                                 <div className="h-full rounded-full transition-all duration-500"
-                                  style={{ width: `${Math.min(100, projectCount * 25)}%`, background: workloadRingColor(projectCount) }} />
+                                  style={{ width: `${Math.min(100, workScore * 25)}%`, background: workloadRingColor(workScore) }} />
                               </div>
                             </div>
 
@@ -1210,11 +1231,12 @@ export default function Dashboard() {
                       const h = c.colorHue ?? hashHue(c.id)
                       const h2 = c.colorHue2 ?? null
                       const projectCount = c.proyectos?.length || 0
+                      const workScore = calcWorkloadScore(c.proyectos)
                       return (
                         <a key={c.id} href={`/semillero/${semilleroId}/colleague/${c.id}`}
                           className="group flex items-center gap-4 bg-card border border-border rounded-xl px-5 py-3.5 hover:border-primary/25 hover:shadow-sm transition-all"
                           style={{ borderLeft: `3px solid oklch(0.62 0.18 ${h})` }}>
-                          <WorkloadRing count={projectCount} size={44}>
+                          <WorkloadRing count={workScore} size={44}>
                             <div className="w-full h-full flex items-center justify-center text-white font-bold text-[13px] overflow-hidden"
                               style={c.avatarUrl ? { background: "var(--muted)" } : { background: `linear-gradient(135deg, oklch(0.68 0.18 ${h}), oklch(0.54 0.22 ${h2 ?? (h + 40) % 360}))` }}>
                               {c.avatarUrl
@@ -1253,12 +1275,14 @@ export default function Dashboard() {
                               </span>
                             )}
                           </div>
-                          <div className="hidden md:flex flex-col gap-1 w-20 flex-shrink-0">
+                          <div className="hidden md:flex flex-col gap-1 w-24 flex-shrink-0">
                             <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                               <div className="h-full rounded-full"
-                                style={{ width: `${Math.min(100, projectCount * 25)}%`, background: workloadRingColor(projectCount) }} />
+                                style={{ width: `${Math.min(100, workScore * 25)}%`, background: workloadRingColor(workScore) }} />
                             </div>
-                            <span className="text-[10px] text-muted-foreground text-right">{projectCount} proy.</span>
+                            <span className="text-[10px] font-semibold text-right" style={{ color: workloadRingColor(workScore) }}>
+                              {workloadLabel(workScore)}
+                            </span>
                           </div>
                           <span className="text-muted-foreground group-hover:text-primary transition-colors flex-shrink-0">→</span>
                         </a>

@@ -6,7 +6,7 @@ import { getColleagueByEmail, linkColleagueUid } from "@/services/colleagues.ser
 import { ensureUsuarioDoc } from "@/services/usuarios.service"
 
 // Superadmins fijos — fuente de verdad para el nivel más alto
-export const SUPER_ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co"]
+export const SUPER_ADMIN_EMAILS = ["andrea_ramirezt@cun.edu.co", "angela_bernalm@cun.edu.co", "jarvey_gonzalez@cun.edu.co"]
 
 async function backfillMemberUids(companionId, uid) {
   try {

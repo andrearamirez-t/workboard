@@ -40,6 +40,7 @@ export default function GlobalDashboard() {
   const tab = searchParams.get("tab") || "resumen"
   const setTab = (t) => setSearchParams({ tab: t }, { replace: true })
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
   const [expandedLogId, setExpandedLogId] = useState(null)
   const [logFilter,  setLogFilter]  = useState(null)
   const [logSearch,  setLogSearch]  = useState("")
@@ -134,11 +135,54 @@ export default function GlobalDashboard() {
 
   const navItems = [
     ...(isSuperAdmin ? [
-      { key: "resumen",  label: "Resumen",  icon: Home },
-      { key: "analisis", label: "Análisis", icon: TrendingUp },
+      { key: "resumen",   label: "Resumen",   icon: Home },
+      { key: "analisis",  label: "Análisis",  icon: TrendingUp },
+      { key: "proyectos", label: "Proyectos", icon: Briefcase },
     ] : []),
     { key: "usuarios", label: "Usuarios", icon: Settings },
   ]
+
+  // ── Proyectos por equipo ──────────────────────────────────────────────────
+  const [projSearch, setProjSearch] = useState("")
+  const [projEstado, setProjEstado] = useState("Todos")
+  const [expandedSems, setExpandedSems] = useState(() => new Set())
+  const toggleSem = id => setExpandedSems(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+
+  const proyPorEquipo = useMemo(() => {
+    return semilleros.map(sem => {
+      const miembros = colleagues.filter(c => c.semilleroId === sem.id)
+      const proyectos = miembros.flatMap(c =>
+        (c.proyectos || []).map(p => ({ ...p, _colega: c.nombre, _coleagueId: c.id }))
+      )
+      return { sem, proyectos }
+    }).filter(({ proyectos }) => proyectos.length > 0)
+  }, [semilleros, colleagues])
+
+  const proyFiltrados = useMemo(() => {
+    const q = projSearch.trim().toLowerCase()
+    return proyPorEquipo.map(({ sem, proyectos }) => {
+      const filtrados = proyectos.filter(p => {
+        if (projEstado !== "Todos" && p.estado !== projEstado) return false
+        if (q && !p.nombre?.toLowerCase().includes(q) && !p._colega?.toLowerCase().includes(q)) return false
+        return true
+      })
+      return { sem, proyectos: filtrados }
+    }).filter(({ proyectos }) => proyectos.length > 0)
+  }, [proyPorEquipo, projSearch, projEstado])
+
+  const ESTADOS_PROJ = ["Todos", "Formulación", "En ejecución", "En evaluación", "Finalizado", "Suspendido"]
+  // color-mix con variables CSS del tema → funciona en modo claro Y oscuro automáticamente
+  const ESTADO_COLOR = {
+    "Formulación":   { bg: "color-mix(in oklch, oklch(0.55 0.18 260), var(--card) 82%)", text: "color-mix(in oklch, oklch(0.55 0.18 260), var(--foreground) 32%)" },
+    "En ejecución":  { bg: "color-mix(in oklch, oklch(0.52 0.15 165), var(--card) 82%)", text: "color-mix(in oklch, oklch(0.52 0.15 165), var(--foreground) 32%)" },
+    "En evaluación": { bg: "color-mix(in oklch, oklch(0.68 0.18 75),  var(--card) 82%)", text: "color-mix(in oklch, oklch(0.68 0.18 75),  var(--foreground) 32%)" },
+    "Finalizado":    { bg: "color-mix(in oklch, oklch(0.55 0.04 165), var(--card) 82%)", text: "color-mix(in oklch, oklch(0.55 0.04 165), var(--foreground) 32%)" },
+    "Suspendido":    { bg: "color-mix(in oklch, oklch(0.57 0.22 27),  var(--card) 82%)", text: "color-mix(in oklch, oklch(0.57 0.22 27),  var(--foreground) 32%)" },
+  }
 
   // ── SIDEBAR ──────────────────────────────────────────────────────────────
   const Sidebar = (
@@ -280,11 +324,11 @@ export default function GlobalDashboard() {
               <span className="text-[12px] text-muted-foreground">Workboard</span>
               <span className="text-[12px] text-muted-foreground">/</span>
               <span className="text-[13px] font-semibold text-foreground">
-                {tab === "resumen" ? "Resumen global" : tab === "analisis" ? "Análisis global" : "Gestionar usuarios"}
+                {tab === "resumen" ? "Resumen global" : tab === "analisis" ? "Análisis global" : tab === "proyectos" ? "Todos los proyectos" : "Gestionar usuarios"}
               </span>
             </div>
             <span className="lg:hidden text-[14px] font-semibold text-foreground">
-              {tab === "resumen" ? "Resumen global" : tab === "analisis" ? "Análisis global" : "Gestionar usuarios"}
+              {tab === "resumen" ? "Resumen global" : tab === "analisis" ? "Análisis global" : tab === "proyectos" ? "Todos los proyectos" : "Gestionar usuarios"}
             </span>
             <div className="ml-auto flex items-center gap-2">
               <NotificationBell
@@ -554,6 +598,127 @@ export default function GlobalDashboard() {
               </>
             ) : tab === "analisis" ? (
               <MetricsDashboard colleagues={colleagues} logs={logs} />
+            ) : tab === "proyectos" ? (
+              <div className="space-y-6">
+                {/* Resumen numérico */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { label: "Total proyectos", value: colleagues.flatMap(c => c.proyectos || []).length },
+                    { label: "En ejecución",    value: colleagues.flatMap(c => c.proyectos || []).filter(p => p.estado === "En ejecución").length },
+                    { label: "Finalizados",     value: colleagues.flatMap(c => c.proyectos || []).filter(p => p.estado === "Finalizado").length },
+                    { label: "Equipos activos", value: proyPorEquipo.length },
+                  ].map(stat => (
+                    <div key={stat.label} className="rounded-2xl border border-border p-4" style={{ background: "var(--card)" }}>
+                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">{stat.label}</p>
+                      <p className="text-[26px] font-black text-foreground leading-none">{stat.value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Filtros */}
+                <div className="flex flex-wrap gap-2 items-center">
+                  <input
+                    placeholder="Buscar proyecto o persona…"
+                    value={projSearch}
+                    onChange={e => setProjSearch(e.target.value)}
+                    className="h-9 px-3 rounded-xl border border-border bg-card text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 min-w-[220px]"
+                  />
+                  <div className="flex gap-1.5 flex-wrap">
+                    {ESTADOS_PROJ.map(e => (
+                      <button key={e} onClick={() => setProjEstado(e)}
+                        className="h-8 px-3 rounded-xl text-[12px] font-semibold border transition-all"
+                        style={projEstado === e
+                          ? { background: "oklch(0.52 0.13 165)", color: "white", borderColor: "transparent" }
+                          : { background: "var(--card)", color: "var(--muted-foreground)", borderColor: "var(--border)" }}>
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Equipos en acordeón */}
+                {proyFiltrados.length === 0 ? (
+                  <p className="text-[13px] text-muted-foreground py-8 text-center">Sin resultados.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {proyFiltrados.map(({ sem, proyectos }) => {
+                      const isOpen = expandedSems.has(sem.id)
+                      const hue = sem.color || 165
+                      return (
+                        <div key={sem.id} className="rounded-2xl border border-border overflow-hidden" style={{ background: "var(--card)" }}>
+                          {/* Cabecera clicable */}
+                          <button
+                            onClick={() => toggleSem(sem.id)}
+                            className="w-full flex items-center gap-3 px-5 py-4 text-left transition-colors hover:brightness-95"
+                            style={{ background: `oklch(0.52 0.13 ${hue} / 0.06)` }}>
+                            <div className="w-3 h-3 rounded-full flex-shrink-0"
+                              style={{ background: `oklch(0.52 0.13 ${hue})` }} />
+                            <p className="text-[14px] font-bold text-foreground flex-1">{sem.nombre}</p>
+                            <span className="text-[11px] font-bold px-2.5 py-1 rounded-full mr-2"
+                              style={{
+                                background: `color-mix(in oklch, oklch(0.52 0.13 ${hue}), var(--card) 82%)`,
+                                color: `color-mix(in oklch, oklch(0.52 0.13 ${hue}), var(--foreground) 32%)`,
+                              }}>
+                              {proyectos.length} {proyectos.length === 1 ? "proyecto" : "proyectos"}
+                            </span>
+                            <ChevronDown size={16} className="text-muted-foreground flex-shrink-0 transition-transform duration-200"
+                              style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)" }} />
+                          </button>
+
+                          {/* Lista de proyectos (colapsable) */}
+                          {isOpen && (
+                            <div className="divide-y divide-border border-t border-border">
+                              {proyectos.map((p, i) => {
+                                const ec = ESTADO_COLOR[p.estado] || ESTADO_COLOR["Formulación"]
+                                const stored = p.avance ?? 0
+                                const avance = stored > 0 ? stored
+                                  : p.estado === "Finalizado"   ? 100
+                                  : p.estado === "En evaluación" ? 75
+                                  : p.estado === "En ejecución"  ? 40
+                                  : p.estado === "Formulación"   ? 10
+                                  : stored
+                                const isInferred = stored === 0 && avance !== 0
+                                return (
+                                  <div key={i} className="px-5 py-3.5 flex items-center gap-4 hover:bg-muted/40 transition-colors">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <button
+                                          onClick={() => navigate(`/semillero/${sem.id}/colleague/${p._coleagueId}`, { state: { openProjectEdit: p.nombre } })}
+                                          className="text-[13px] font-semibold text-left truncate hover:underline transition-all"
+                                          style={{ color: `color-mix(in oklch, oklch(0.55 0.15 ${hue}), var(--foreground) 28%)` }}>
+                                          {p.nombre}
+                                        </button>
+                                        {p.estado && (
+                                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0"
+                                            style={{ background: ec.bg, color: ec.text }}>
+                                            {p.estado}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{p._colega}</p>
+                                      {p.area && <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">{p.area}</p>}
+                                    </div>
+                                    {/* Barra de avance */}
+                                    <div className="flex-shrink-0 w-24 space-y-1 text-right">
+                                      <p className="text-[11px] font-bold text-foreground">
+                                        {avance}%{isInferred && <span className="text-[9px] font-normal text-muted-foreground ml-0.5">~</span>}
+                                      </p>
+                                      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--muted)" }}>
+                                        <div className="h-full rounded-full transition-all"
+                                          style={{ width: `${avance}%`, background: `oklch(0.52 0.13 ${hue})` }} />
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
             ) : (
               <GestionarUsuarios semilleros={semilleros} />
             )}

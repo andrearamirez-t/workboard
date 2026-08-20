@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef, useMemo } from "react"
 import { downloadFile } from "@/utils/download"
-import { useParams, useNavigate } from "react-router-dom"
-import { doc, getDoc } from "firebase/firestore"
+import { useParams, useNavigate, useLocation } from "react-router-dom"
+import { doc, getDoc, updateDoc, arrayUnion, addDoc, collection, serverTimestamp } from "firebase/firestore"
 import { db } from "@/services/firebase"
-import { deleteColleague, deleteProject } from "@/services/colleagues.service"
+import { deleteColleague, deleteProject, updateProject } from "@/services/colleagues.service"
+import { extractPdfText, parseCunPdf } from "@/utils/parsePropuesta"
 import { getGrupos, addGrupoProject } from "@/services/groups.service"
 import { addLog, getLogs, deleteLog, updateLog } from "@/services/logs.service"
 import { addFeedback, getFeedback, deleteFeedback, updateFeedback } from "@/services/feedback.service"
@@ -91,6 +92,7 @@ function getAvance(proyecto) {
 export default function ColleagueDetail() {
   const { id, semilleroId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const { user, myColleagueId, isAdmin, isSuperAdmin } = useAuth()
   const isOwn = id === myColleagueId
 
@@ -136,6 +138,92 @@ export default function ColleagueDetail() {
 
   const taskFileInputRef = useRef(null)
   const uploadingTaskIdRef = useRef(null)
+
+  // ── Inline project form state ─────────────────────────────────────────────
+  const PROJ_ESTADOS = ["Formulación", "En ejecución", "En evaluación", "Finalizado", "Suspendido"]
+  const emptyProjectForm = { nombre: "", estado: "En ejecución", area: "", herramientas: "", queHace: "", observaciones: "", fechaInicio: "", fechaEntrega: "" }
+  const [showProjectForm, setShowProjectForm] = useState(false)
+  const [editingProject, setEditingProject] = useState(null)
+  const [projectForm, setProjectForm] = useState(emptyProjectForm)
+  const [savingProject, setSavingProject] = useState(false)
+  const [projectSaveError, setProjectSaveError] = useState(null)
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [pdfError, setPdfError] = useState(null)
+  const [pdfImported, setPdfImported] = useState(false)
+  const pdfInputRef = useRef(null)
+
+  // Auto-open edit form when arriving from global projects view
+  useEffect(() => {
+    const target = location.state?.openProjectEdit
+    if (!target || !companero) return
+    const proyecto = (companero.proyectos || []).find(p => p.nombre === target)
+    if (!proyecto) return
+    setEditingProject(proyecto)
+    setProjectForm({
+      nombre: proyecto.nombre || "",
+      estado: proyecto.estado || "En ejecución",
+      area: proyecto.area || "",
+      herramientas: Array.isArray(proyecto.herramientas) ? proyecto.herramientas.join(", ") : (proyecto.herramientas || ""),
+      queHace: proyecto.queHace || "",
+      observaciones: proyecto.observaciones || "",
+      fechaInicio: proyecto.fechaInicio || "",
+      fechaEntrega: proyecto.fechaEntrega || "",
+    })
+    setShowProjectForm(true)
+    setPdfImported(false)
+    setPdfError(null)
+  }, [companero, location.state])
+
+  const handlePdfImport = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+    setPdfError(null); setPdfImported(false); setPdfLoading(true)
+    try {
+      const rawText = await extractPdfText(file)
+      const fields = parseCunPdf(rawText)
+      if (Object.keys(fields).length === 0) { setPdfError("No se reconoció el formato del PDF."); return }
+      setProjectForm(prev => ({
+        ...prev,
+        nombre: fields.nombre || prev.nombre,
+        area: fields.area || prev.area,
+        queHace: fields.queHace || prev.queHace,
+        herramientas: Array.isArray(fields.herramientas) ? fields.herramientas.join(", ") : (fields.herramientas || prev.herramientas),
+        fechaInicio: fields.fechaInicio || prev.fechaInicio,
+        fechaEntrega: fields.fechaEntrega || prev.fechaEntrega,
+      }))
+      setPdfImported(true)
+    } catch { setPdfError("No se pudo leer el archivo.") }
+    finally { setPdfLoading(false) }
+  }
+
+  const handleSaveProject = async () => {
+    if (!projectForm.nombre.trim()) return
+    setSavingProject(true); setProjectSaveError(null)
+    const proyecto = {
+      nombre: projectForm.nombre.trim(),
+      estado: projectForm.estado,
+      avance: 0,
+      area: projectForm.area.trim(),
+      queHace: projectForm.queHace.trim(),
+      herramientas: projectForm.herramientas.split(",").map(h => h.trim()).filter(Boolean),
+      observaciones: projectForm.observaciones.trim(),
+      fechaInicio: projectForm.fechaInicio,
+      fechaEntrega: projectForm.fechaEntrega,
+    }
+    try {
+      if (editingProject) {
+        await updateProject(id, editingProject, proyecto)
+      } else {
+        await updateDoc(doc(db, "companeros", id), { proyectos: arrayUnion(proyecto) })
+        addDoc(collection(db, "logs"), { colleagueId: id, colleagueName: companero?.nombre, nota: `Nuevo proyecto: ${proyecto.nombre}`, creadoPor: user?.uid, semilleroId: semilleroId || null, createdAt: serverTimestamp() }).catch(() => {})
+      }
+      const snap = await getDoc(doc(db, "companeros", id))
+      setCompanero(snap.data())
+      setShowProjectForm(false); setEditingProject(null); setProjectForm(emptyProjectForm); setPdfImported(false)
+    } catch (err) { setProjectSaveError("Error al guardar. Intenta de nuevo.") }
+    finally { setSavingProject(false) }
+  }
 
   // isOwnProfile: true si el uid del companero cargado coincide con el usuario actual.
   // Esto cubre el caso en que myColleagueId no esté sincronizado (ej: superadmins).
@@ -695,11 +783,119 @@ export default function ColleagueDetail() {
               )}
             </h2>
             {canEdit && (
-              <Button size="sm" className="text-[13px] h-8" onClick={() => navigate(`/semillero/${semilleroId}/colleague/${id}/project/new`)}>
-                + Proyecto
+              <Button size="sm" className="text-[13px] h-8" onClick={() => { setShowProjectForm(v => !v); setEditingProject(null); setProjectForm(emptyProjectForm); setPdfImported(false) }}>
+                {showProjectForm && !editingProject ? "Cancelar" : "+ Proyecto"}
               </Button>
             )}
           </div>
+
+          {/* ── Inline project form ─────────────────────────────────────── */}
+          {showProjectForm && canEdit && (
+            <div className="rounded-xl border border-border p-4 space-y-3 mb-3" style={{ background: "var(--muted)" }}>
+              <p className="text-[13px] font-semibold text-foreground">{editingProject ? "Editar proyecto" : "Nuevo proyecto"}</p>
+              <input ref={pdfInputRef} type="file" accept=".pdf" className="hidden" onChange={handlePdfImport} />
+              {!editingProject && (
+                <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 text-sm"
+                      style={{ background: "oklch(0.55 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>⬆</div>
+                    <p className="text-[13px] font-semibold text-foreground">Importar desde PDF de propuesta</p>
+                  </div>
+                  <div className="rounded-lg p-3 space-y-1.5" style={{ background: "oklch(0.55 0.18 260 / 0.06)", border: "1px solid oklch(0.55 0.18 260 / 0.15)" }}>
+                    <p className="text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: "oklch(0.50 0.18 260)" }}>Cómo hacerlo</p>
+                    {[
+                      { n: "1", text: "Ingresa al Asistente de Propuestas", link: "https://plataforma-investigaciones-vgpt.web.app/dashboard" },
+                      { n: "2", text: "Genera el PDF de tu propuesta allí" },
+                      { n: "3", text: "Descárgalo y súbelo aquí con el botón de abajo" },
+                    ].map(step => (
+                      <div key={step.n} className="flex items-start gap-2">
+                        <span className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-black flex-shrink-0 mt-0.5"
+                          style={{ background: "oklch(0.55 0.18 260)" }}>{step.n}</span>
+                        {step.link
+                          ? <a href={step.link} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold inline-flex items-center gap-1 transition-opacity hover:opacity-70" style={{ color: "oklch(0.50 0.18 260)" }}>
+                              {step.text}
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                              </svg>
+                            </a>
+                          : <span className="text-[11px] text-muted-foreground">{step.text}</span>}
+                      </div>
+                    ))}
+                  </div>
+                  {pdfError && <p className="text-[11px] text-destructive">{pdfError}</p>}
+                  {pdfImported && <p className="text-[11px] font-medium" style={{ color: "oklch(0.55 0.18 145)" }}>✓ Datos importados correctamente.</p>}
+                  <button type="button" onClick={() => pdfInputRef.current?.click()} disabled={pdfLoading}
+                    className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg border transition-all disabled:opacity-50"
+                    style={{ borderColor: "oklch(0.55 0.18 260 / 0.35)", color: "oklch(0.50 0.18 260)", background: "oklch(0.55 0.18 260 / 0.07)" }}>
+                    {pdfLoading ? "Leyendo…" : "⬆ Seleccionar PDF"}
+                  </button>
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Nombre *</p>
+                  <input placeholder="Nombre del proyecto" value={projectForm.nombre}
+                    onChange={e => setProjectForm(f => ({ ...f, nombre: e.target.value }))}
+                    className="w-full bg-card border border-border rounded-xl px-3 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Estado</p>
+                  <select value={projectForm.estado} onChange={e => setProjectForm(f => ({ ...f, estado: e.target.value }))}
+                    className="w-full bg-card border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30">
+                    {PROJ_ESTADOS.map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Área</p>
+                  <input placeholder="Área o enfoque" value={projectForm.area}
+                    onChange={e => setProjectForm(f => ({ ...f, area: e.target.value }))}
+                    className="w-full bg-card border border-border rounded-xl px-3 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Herramientas (separadas por coma)</p>
+                  <input placeholder="React, Firebase, Python…" value={projectForm.herramientas}
+                    onChange={e => setProjectForm(f => ({ ...f, herramientas: e.target.value }))}
+                    className="w-full bg-card border border-border rounded-xl px-3 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Fecha inicio</p>
+                  <input type="date" value={projectForm.fechaInicio}
+                    onChange={e => setProjectForm(f => ({ ...f, fechaInicio: e.target.value }))}
+                    className="w-full bg-card border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Fecha entrega</p>
+                  <input type="date" value={projectForm.fechaEntrega}
+                    onChange={e => setProjectForm(f => ({ ...f, fechaEntrega: e.target.value }))}
+                    className="w-full bg-card border border-border rounded-xl px-3 py-2 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30" />
+                </div>
+                <div className="sm:col-span-2">
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Qué hace</p>
+                  <textarea placeholder="Descripción del proyecto…" value={projectForm.queHace}
+                    onChange={e => setProjectForm(f => ({ ...f, queHace: e.target.value }))}
+                    rows={2} className="w-full bg-card border border-border rounded-xl px-3 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 resize-none" />
+                </div>
+                <div className="sm:col-span-2">
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Observaciones</p>
+                  <textarea placeholder="Notas adicionales…" value={projectForm.observaciones}
+                    onChange={e => setProjectForm(f => ({ ...f, observaciones: e.target.value }))}
+                    rows={2} className="w-full bg-card border border-border rounded-xl px-3 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 resize-none" />
+                </div>
+              </div>
+              {projectSaveError && <p className="text-[12px] text-destructive">{projectSaveError}</p>}
+              <div className="flex gap-2">
+                <button onClick={handleSaveProject} disabled={savingProject || !projectForm.nombre.trim()}
+                  className="h-9 px-5 rounded-xl text-[13px] font-bold text-white disabled:opacity-50 transition-all hover:opacity-90"
+                  style={{ background: "linear-gradient(135deg, oklch(0.52 0.13 165), oklch(0.44 0.14 185))" }}>
+                  {savingProject ? "Guardando…" : editingProject ? "Actualizar proyecto" : "Crear proyecto"}
+                </button>
+                <button onClick={() => { setShowProjectForm(false); setEditingProject(null); setProjectForm(emptyProjectForm) }}
+                  className="h-9 px-4 rounded-xl text-[13px] font-medium border border-border text-muted-foreground hover:text-foreground transition-colors">
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
 
           {companero.proyectos?.length > 0 && (
             <div className="relative mb-3">
@@ -732,7 +928,8 @@ export default function ColleagueDetail() {
                 const pH = CHART_HUES[index % CHART_HUES.length]
                 const pState = proyecto.estado ? PROJECT_STATE_STYLE[proyecto.estado] : null
                 return (
-                  <div key={index} className="bg-card border border-border rounded-2xl overflow-hidden group"
+                  <div key={index}
+                    className="bg-card border border-border rounded-2xl overflow-hidden group"
                     style={{ borderLeftColor: `oklch(0.58 0.16 ${pH})`, borderLeftWidth: "3px" }}>
                     <div className="p-5">
 
@@ -758,7 +955,23 @@ export default function ColleagueDetail() {
                         {canEdit && (
                           <div className="flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                             <button
-                              onClick={() => navigate(`/semillero/${semilleroId}/colleague/${id}/project/new`, { state: { editProject: proyecto } })}
+                              onClick={() => {
+                                setEditingProject(proyecto)
+                                setProjectForm({
+                                  nombre: proyecto.nombre || "",
+                                  estado: proyecto.estado || "En ejecución",
+                                  area: proyecto.area || "",
+                                  herramientas: Array.isArray(proyecto.herramientas) ? proyecto.herramientas.join(", ") : (proyecto.herramientas || ""),
+                                  queHace: proyecto.queHace || "",
+                                  observaciones: proyecto.observaciones || "",
+                                  fechaInicio: proyecto.fechaInicio || "",
+                                  fechaEntrega: proyecto.fechaEntrega || "",
+                                })
+                                setShowProjectForm(true)
+                                setPdfImported(false)
+                                setPdfError(null)
+                                window.scrollTo({ top: 0, behavior: "smooth" })
+                              }}
                               className="text-[12px] font-semibold hover:opacity-70 transition-opacity"
                               style={{ color: "oklch(0.42 0.14 165)" }}>
                               Editar

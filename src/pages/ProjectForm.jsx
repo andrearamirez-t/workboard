@@ -228,7 +228,7 @@ export default function ProjectForm() {
           <div className="absolute top-0 right-0 w-56 h-56 opacity-25"
             style={{ background: "radial-gradient(circle at top right, oklch(0.58 0.16 295), transparent 65%)", filter: "blur(40px)" }} />
         </div>
-        <div className="max-w-2xl mx-auto w-full relative flex items-center gap-5">
+        <div className="relative flex items-center gap-5 px-6">
           <div className="w-14 h-14 rounded-2xl flex-shrink-0 flex items-center justify-center"
             style={{ background: "linear-gradient(135deg, oklch(0.62 0.18 165), oklch(0.54 0.22 205))", boxShadow: "0 8px 24px oklch(0.52 0.13 165 / 40%)" }}>
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -246,10 +246,11 @@ export default function ProjectForm() {
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-6 py-8 w-full">
+      <div className="px-6 py-6">
+        <div className="rounded-2xl border border-border p-5 space-y-4" style={{ background: "var(--muted)" }}>
 
         {/* ── Importar desde PDF ── */}
-        <div className="rounded-2xl border border-border bg-card p-5 mb-6 space-y-3">
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-base"
               style={{ background: "oklch(0.55 0.18 260 / 0.12)", color: "oklch(0.55 0.18 260)" }}>
@@ -309,93 +310,68 @@ export default function ProjectForm() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
 
-          {/* ── Sección: Identidad ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4"
-            style={{ borderLeftColor: "oklch(0.52 0.13 165)", borderLeftWidth: "3px" }}>
-            <span className={sectionLabel}>Identidad del proyecto</span>
-
-            <div className="flex gap-3 items-end">
-              <div className="flex-1">
-                <label className="block text-[13px] font-medium text-foreground mb-1.5">Nombre *</label>
+          {/* ── Campos del proyecto ── */}
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[12px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Nombre *</label>
                 <input name="nombre" value={form.nombre} onChange={handleChange}
                   placeholder="Ej: Portal de pagos" className={inputClass} />
               </div>
               <div>
-                <label className="block text-[13px] font-medium text-foreground mb-1.5">Estado</label>
-                <select name="estado" value={form.estado} onChange={handleChange}
-                  className={selectClass + " w-44"}>
+                <label className="block text-[12px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Estado</label>
+                <select name="estado" value={form.estado} onChange={handleChange} className={inputClass}>
                   <option value="">Sin estado</option>
                   {PROJECT_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
-            </div>
-
-            <div>
-              <label className="block text-[13px] font-medium text-foreground mb-1.5">Enfoque</label>
-              <input list="areas-list-p" name="area" value={form.area} onChange={handleChange}
-                placeholder="Ej: Robótica, Diseño UX/UI…" className={inputClass} autoComplete="off" />
-              <datalist id="areas-list-p">
-                {AREAS.map(a => <option key={a} value={a} />)}
-              </datalist>
-            </div>
-
-            <div>
-              <label className="block text-[13px] font-medium text-foreground mb-1.5">¿Qué hace en este proyecto?</label>
-              <textarea name="queHace" value={form.queHace} onChange={handleChange}
-                placeholder="Ej: Desarrolla el módulo de facturación…" rows={3} className={inputClass} />
-            </div>
-          </div>
-
-          {/* ── Sección: Herramientas ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-4"
-            style={{ borderLeftColor: "oklch(0.62 0.12 230)", borderLeftWidth: "3px" }}>
-            <span className={sectionLabel}>Stack y observaciones</span>
-            <div>
-              <label className="block text-[13px] font-medium text-foreground mb-1.5">Herramientas usadas</label>
-              <input name="herramientas" value={form.herramientas} onChange={handleChange}
-                placeholder="Ej: React, Firebase (separadas por coma)" className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-[13px] font-medium text-foreground mb-1.5">Observaciones</label>
-              <textarea name="observaciones" value={form.observaciones} onChange={handleChange}
-                placeholder="Algo útil que quieras recordar…" rows={3} className={inputClass} />
-            </div>
-          </div>
-
-          {/* ── Sección: Cronograma ── */}
-          <div className="bg-card border border-border rounded-2xl p-6 space-y-5"
-            style={{ borderLeftColor: "oklch(0.58 0.16 295)", borderLeftWidth: "3px" }}>
-            <span className={sectionLabel}>Cronograma</span>
-
-            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[13px] font-medium text-foreground mb-1.5">Fecha de inicio</label>
+                <label className="block text-[12px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Enfoque</label>
+                <input list="areas-list-p" name="area" value={form.area} onChange={handleChange}
+                  placeholder="Ej: Robótica, Diseño UX/UI…" className={inputClass} autoComplete="off" />
+                <datalist id="areas-list-p">
+                  {AREAS.map(a => <option key={a} value={a} />)}
+                </datalist>
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Herramientas (separadas por coma)</label>
+                <input name="herramientas" value={form.herramientas} onChange={handleChange}
+                  placeholder="Ej: React, Firebase, Python…" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Fecha de inicio</label>
                 <input type="date" name="fechaInicio" value={form.fechaInicio} onChange={handleChange}
                   className={inputClass} />
               </div>
               <div>
-                <label className="block text-[13px] font-medium text-foreground mb-1.5">Entrega final</label>
+                <label className="block text-[12px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Entrega final</label>
                 <input type="date" name="fechaEntrega" value={form.fechaEntrega} onChange={handleChange}
                   className={inputClass} />
               </div>
+              <div className="sm:col-span-2">
+                <label className="block text-[12px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">¿Qué hace en este proyecto?</label>
+                <textarea name="queHace" value={form.queHace} onChange={handleChange}
+                  placeholder="Ej: Desarrolla el módulo de facturación…" rows={3} className={inputClass} />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-[12px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Observaciones</label>
+                <textarea name="observaciones" value={form.observaciones} onChange={handleChange}
+                  placeholder="Algo útil que quieras recordar…" rows={2} className={inputClass} />
+              </div>
             </div>
 
-            <div>
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <p className="text-[13px] font-medium text-foreground">Versiones / Hitos</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Entregas intermedias, betas o fases</p>
-                </div>
+            {/* Hitos */}
+            <div className="border-t border-border pt-3 mt-1">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[12px] font-semibold text-muted-foreground uppercase tracking-wide">Hitos / Versiones</p>
                 <button type="button" onClick={addVersion}
-                  className="text-[12px] font-semibold h-8 px-3 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all flex-shrink-0">
+                  className="text-[11px] font-semibold h-7 px-2.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all">
                   + Agregar hito
                 </button>
               </div>
-
               {form.versiones.length === 0 && (
                 <p className="text-[12px] text-muted-foreground italic">Sin hitos definidos aún.</p>
               )}
-
               <div className="space-y-2">
                 {form.versiones.map((v, i) => (
                   <div key={i} className="flex gap-2 items-center">
@@ -409,9 +385,7 @@ export default function ProjectForm() {
                       {VERSION_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                     <button type="button" onClick={() => removeVersion(i)}
-                      className="text-destructive text-xl leading-none flex-shrink-0 hover:opacity-60 px-1 transition-opacity">
-                      ×
-                    </button>
+                      className="text-destructive text-xl leading-none flex-shrink-0 hover:opacity-60 px-1 transition-opacity">×</button>
                   </div>
                 ))}
               </div>
@@ -484,6 +458,7 @@ export default function ProjectForm() {
           </div>
 
         </form>
+        </div>
       </div>
       <Footer />
       <input
